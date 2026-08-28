@@ -1,6 +1,5 @@
 {
-
-"NEEDEDFILEONE": "https://raw.githubusercontent.com/wewewer4fteeeeeee/thiiiingg/refs/heads/main/frida-il2cpp-bridge.js"
-"NEEDEDFILETWO": "https://raw.githubusercontent.com/wewewer4fteeeeeee/thiiiingg/refs/heads/main/tsconfig.json"  
+  "NEEDEDFILEONE": "https://raw.githubusercontent.com/wewewer4fteeeeeee/thiiiingg/refs/heads/main/frida-il2cpp-bridge.js"
+  "NEEDEDFILETWO": "https://raw.githubusercontent.com/wewewer4fteeeeeee/thiiiingg/refs/heads/main/tsconfig.json"  
 
 }
