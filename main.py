@@ -1825,8 +1825,8 @@ def client_bootstrap():
     payload = {
         "updateType": "None", "attestResult": "Valid",
         "attestTokenExpiresAt": 1820877961,
-        "photonAppID": "a219af37-3f92-4ef7-9604-0b7b54be4ba4",
-        "photonVoiceAppID": "cfa3dc03-abf4-45c3-925e-931a826807d9",
+        "photonAppID": "8049869d-4304-491e-b844-e77fdf5df0e4",
+        "photonVoiceAppID": "9aea8f08-e6d9-4a1c-9934-cbca4142c479",
         "metadataHash": "3225b4ed43082cec01c79acd8b1c09ea335f77870663342a5dededf6f4979f66",
         "termsAcceptanceNeeded": [], "dailyMissionDateKey": "",
         "dailyMissions": None, "dailyMissionResetTime": 0,
@@ -2140,6 +2140,640 @@ def handle_ws():
         except Exception as e:
             return jsonify({"status": "error", "message": str(e)}), 400
     return jsonify({"status": "error", "message": "No token provided"}), 400
+
+@app.route("/v2/account/authenticate/steam", methods=["POST", "GET"])
+def authenticate_steam():
+    body = request.get_json(silent=True) or {}
+    vars_ = body.get("vars", {})
+    device_id = vars_.get("deviceID", "") or body.get("id", "") or request.args.get("id", "")
+    username = request.args.get("username", "") or body.get("username", f"Player{secrets.token_hex(3).upper()}")
+    if not username:
+        username = f"Player{secrets.token_hex(3).upper()}"
+    flask_session['username'] = username
+    return BearerGeneration(username)
+
+@app.route("/v2/account/authenticate/email", methods=["POST", "GET"])
+def authenticate_email():
+    body = request.get_json(silent=True) or {}
+    email = body.get("email", "") or request.args.get("email", "")
+    username = request.args.get("username", "") or body.get("username", f"Player{secrets.token_hex(3).upper()}")
+    if not username:
+        username = f"Player{secrets.token_hex(3).upper()}"
+    flask_session['username'] = username
+    return BearerGeneration(username)
+
+@app.route("/v2/session/logout", methods=["POST"])
+def session_logout():
+    flask_session.clear()
+    return jsonify({})
+
+@app.route("/v2/account/unlink/device", methods=["POST"])
+def unlink_device():
+    return jsonify({})
+
+@app.route("/v2/account/delete", methods=["POST", "DELETE"])
+def delete_account():
+    return jsonify({})
+
+@app.route("/v2/user", methods=["GET"])
+@app.route("/v2/users", methods=["GET"])
+def get_users():
+    return jsonify({"users": []})
+
+@app.route("/v2/rpc/user.getFeatureFlags", methods=["GET", "POST"])
+def feature_flags():
+    return jsonify({"payload": json.dumps({
+        "enableDailyMissions": True,
+        "uniqueObjects": True,
+        "voiceModService": "",
+        "goopLoadoutSaving": True,
+        "metaCameraEnabled": True,
+    })})
+
+@app.route("/v2/rpc/user.getVRPresence", methods=["GET", "POST"])
+def presence_get_current():
+    return jsonify({"payload": json.dumps({
+        "presence": {"roomCode": "", "gameMode": 0, "appearOffline": False, "clientVersion": "", "photonVersion": ""},
+        "errorCode": 0,
+    })})
+
+@app.route("/v2/storage", methods=["GET"])
+def storage_get():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"error": "unauthorized"}), 401
+    udata = get_all_user_data(username) if hasattr(__builtins__, '__import__') else {}
+    objects = _build_user_objects(username, udata).get("objects", [])
+    return jsonify({"objects": objects})
+
+@app.route("/v2/storage", methods=["PUT"])
+def storage_write_bulk():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    objects = body.get("objects", [])
+    acks = []
+    for obj in objects:
+        coll = obj.get("collection", "")
+        key = obj.get("key", "")
+        value = obj.get("value", "{}")
+        if isinstance(value, (dict, list)):
+            value = json.dumps(value)
+        ver = secrets.token_hex(8)
+        save_user_items(username, {
+            "value": value,
+            "update_time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "version": ver
+        }, coll, key)
+        acks.append({"collection": coll, "key": key, "version": ver})
+    return jsonify({"acks": acks})
+
+@app.route("/v2/storage", methods=["DELETE"])
+def storage_delete():
+    return jsonify({})
+
+@app.route("/v2/storage/<collection>", methods=["GET"])
+def storage_get_collection(collection):
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"error": "unauthorized"}), 401
+    item = get_user_items(username, collection, collection)
+    if item:
+        return jsonify({"objects": [item]})
+    return jsonify({"objects": []})
+
+@app.route("/v2/storage/<collection>/<uid_param>", methods=["GET"])
+def storage_list_user(collection, uid_param):
+    item = get_user_items(uid_param, collection, collection)
+    if item:
+        return jsonify({"objects": [item]})
+    return jsonify({"objects": []})
+
+@app.route("/v2/rpc/GetBulkUserData", methods=["GET", "POST"])
+@app.route("/v2/rpc/getBulkUserData", methods=["GET", "POST"])
+def get_bulk_user_data():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": "{}"})
+    udata = get_all_user_data(username) if callable(getattr(__builtins__, '__import__', None)) else {}
+    objs = _build_user_objects(username, udata).get("objects", [])
+
+    def _read(coll, key, default):
+        for o in objs:
+            if o.get("collection") == coll and o.get("key") == key:
+                try:
+                    return json.loads(o["value"])
+                except Exception:
+                    return default
+        return default
+
+    result = {
+        "avatar": _read("user_avatar", "0", {}),
+        "avatarInventory": _read("user_inventory", "avatar", {"items": []}),
+        "researchInventory": _read("user_inventory", "research", {"nodes": []}),
+        "stash": _read("user_inventory", "stash", {"items": [], "materials": [], "stashPos": 0, "version": 1}),
+        "upgradesInventory": _read("user_inventory", "upgrades", {"upgrades": []}),
+        "loadout": _read("user_inventory", "gameplay_loadout", {"version": 1}),
+        "loadoutTemplates": _read("user_inventory", "loadout_templates", []),
+        "blueprints": _read("user_inventory", "blueprints", []),
+        "gameplayItemPreferences": _read("user_preferences", "gameplay_items", {"recents": [], "favorites": []}),
+        "preferences": _read("user_preferences", "settings", {}),
+        "questSystemProgress": {"version": 1, "completed": []},
+        "skillsPreferences": _read("user_preferences", "skills", {"disabledSkills": []}),
+        "fishingInventory": _read("user_inventory", "fishing", {"baitSystemUnlocked": False, "rods": [], "fish": {}, "baits": {}}),
+    }
+    return jsonify({"payload": json.dumps(result)})
+
+@app.route("/v2/rpc/avatar.getAvatars", methods=["POST", "GET"])
+@app.route("/v2/rpc/avatar.get", methods=["POST", "GET"])
+def avatar_get_avatars():
+    body = request.get_json(silent=True) or {}
+    payload_raw = body.get("payload", body)
+    if isinstance(payload_raw, str):
+        try:
+            payload_raw = json.loads(payload_raw)
+        except Exception:
+            payload_raw = {}
+    user_ids = payload_raw.get("userIDs", [])
+    result_ids, result_avatars = [], []
+    for uid in user_ids:
+        av = get_user_avatar(uid)
+        if av:
+            result_ids.append(uid)
+            try:
+                result_avatars.append(json.loads(av["value"]) if isinstance(av.get("value"), str) else av)
+            except Exception:
+                result_avatars.append({})
+    return jsonify({"payload": json.dumps({"userIDs": result_ids, "avatars": result_avatars})})
+
+@app.route("/v2/rpc/mining.balance", methods=["GET", "POST"])
+def mining_balance():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": json.dumps({"hardCurrency": 0.0, "researchPoints": 0.0})})
+    cur = get_user_currency(username)
+    return jsonify({"payload": json.dumps({
+        "hardCurrency": float(cur.get("cc", 9999999)),
+        "researchPoints": float(cur.get("rp", 9999999)),
+    })})
+
+@app.route("/v2/rpc/mining.collect", methods=["POST", "GET"])
+def mining_collect():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": json.dumps({"succeeded": False, "errorCode": "Unknown"})})
+    cur = get_user_currency(username)
+    return jsonify({"payload": json.dumps({
+        "succeeded": True, "errorCode": "None",
+        "balance": {"hardCurrency": float(cur.get("cc", 9999999)), "researchPoints": float(cur.get("rp", 9999999))},
+        "wallet": {"softCurrency": cur.get("nuts", 9999999), "hardCurrency": cur.get("cc", 9999999), "researchPoints": cur.get("rp", 9999999)},
+    })})
+
+@app.route("/v2/rpc/mining.sell", methods=["POST", "GET"])
+def mining_sell():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": json.dumps({"succeeded": False, "errorCode": "Unknown"})})
+    cur = get_user_currency(username)
+    return jsonify({"payload": json.dumps({
+        "succeeded": True, "errorCode": "None",
+        "wallet": {"softCurrency": cur.get("nuts", 9999999), "hardCurrency": cur.get("cc", 9999999), "researchPoints": cur.get("rp", 9999999)},
+    })})
+
+@app.route("/v2/rpc/store.buy", methods=["POST", "GET"])
+def store_buy():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": json.dumps({"succeeded": False, "errorCode": "Unknown"})})
+    cur = get_user_currency(username)
+    return jsonify({"payload": json.dumps({
+        "succeeded": True, "errorCode": "None",
+        "wallet": {"softCurrency": cur.get("nuts", 9999999), "hardCurrency": cur.get("cc", 9999999), "researchPoints": cur.get("rp", 9999999)},
+    })})
+
+@app.route("/v2/rpc/store.buyAvatar", methods=["POST", "GET"])
+def store_buy_avatar():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": json.dumps({"succeeded": False, "errorCode": "Unknown"})})
+    cur = get_user_currency(username)
+    all_items = get_all_avatar_item_ids() or FALLBACK_AVATAR_ITEM_IDS
+    return jsonify({"payload": json.dumps({
+        "succeeded": True, "errorCode": "None",
+        "wallet": {"softCurrency": cur.get("nuts", 9999999), "hardCurrency": cur.get("cc", 9999999), "researchPoints": cur.get("rp", 9999999)},
+        "inventoryAvatarItems": all_items,
+    })})
+
+@app.route("/v2/rpc/wallet.update", methods=["POST", "GET"])
+def wallet_update():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": json.dumps({"succeeded": False, "errorCode": "Unknown"})})
+    cur = get_user_currency(username)
+    return jsonify({"payload": json.dumps({
+        "softCurrency": cur.get("nuts", 9999999),
+        "hardCurrency": cur.get("cc", 9999999),
+        "researchPoints": cur.get("rp", 9999999),
+    })})
+
+@app.route("/v2/rpc/updateWalletSoftCurrency", methods=["POST", "GET"])
+@app.route("/v2/rpc/updateWalletHardCurrency", methods=["POST", "GET"])
+@app.route("/v2/rpc/updateWalletResearchPoints", methods=["POST", "GET"])
+def update_wallet_currency():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": "{}"})
+    cur = get_user_currency(username)
+    return jsonify({"payload": json.dumps({
+        "softCurrency": cur.get("nuts", 9999999),
+        "hardCurrency": cur.get("cc", 9999999),
+        "researchPoints": cur.get("rp", 9999999),
+    })})
+
+@app.route("/v2/rpc/nuts.getWallet", methods=["GET", "POST"])
+def nuts_get_wallet():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": json.dumps({"success": False, "balance": 0})})
+    cur = get_user_currency(username)
+    return jsonify({"payload": json.dumps({"success": True, "balance": cur.get("nuts", 9999999)})})
+
+@app.route("/v2/rpc/fishing.getWallet", methods=["GET", "POST"])
+def fish_get_wallet():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": json.dumps({"success": False, "balance": 0})})
+    cur = get_user_currency(username)
+    return jsonify({"payload": json.dumps({"success": True, "balance": cur.get("fish", 9999999)})})
+
+@app.route("/v2/rpc/fishing.updateBalance", methods=["POST", "GET"])
+def fish_update_wallet():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": json.dumps({"success": False, "balance": 0})})
+    cur = get_user_currency(username)
+    return jsonify({"payload": json.dumps({"success": True, "balance": cur.get("fish", 9999999)})})
+
+@app.route("/v2/rpc/fishing.saveInventory", methods=["POST", "GET"])
+def fish_save_inventory():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": "{}"})
+    body = request.get_json(silent=True) or {}
+    payload_raw = body.get("payload", body)
+    if isinstance(payload_raw, str):
+        try:
+            payload_raw = json.loads(payload_raw)
+        except Exception:
+            payload_raw = {}
+    save_user_items(username, {
+        "value": json.dumps(payload_raw),
+        "update_time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "version": secrets.token_hex(8)
+    }, "user_inventory", "fishing")
+    return jsonify({"payload": "{}"})
+
+@app.route("/v2/rpc/purchase.researchPoints", methods=["POST", "GET"])
+def purchase_research_points():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": json.dumps({"succeeded": False, "errorCode": "Unknown"})})
+    cur = get_user_currency(username)
+    return jsonify({"payload": json.dumps({
+        "succeeded": True, "errorCode": "None",
+        "wallet": {"softCurrency": cur.get("nuts", 9999999), "hardCurrency": cur.get("cc", 9999999), "researchPoints": cur.get("rp", 9999999)},
+    })})
+
+@app.route("/v2/rpc/research.unlock", methods=["POST", "GET"])
+@app.route("/v2/rpc/research.item", methods=["POST", "GET"])
+@app.route("/v2/rpc/research.skill", methods=["POST", "GET"])
+def research_unlock():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": json.dumps({"succeeded": False, "errorCode": "Unknown"})})
+    all_nodes = get_all_research_node_ids() or []
+    cur = get_user_currency(username)
+    return jsonify({"payload": json.dumps({
+        "succeeded": True, "errorCode": "None",
+        "wallet": {"softCurrency": cur.get("nuts", 9999999), "hardCurrency": cur.get("cc", 9999999), "researchPoints": cur.get("rp", 9999999)},
+        "inventoryResearchNodes": all_nodes,
+    })})
+
+@app.route("/v2/rpc/purchase.upgrade", methods=["POST", "GET"])
+@app.route("/v2/rpc/stash.upgrade", methods=["POST", "GET"])
+@app.route("/v2/rpc/purchase.stashUpgrade", methods=["POST", "GET"])
+def purchase_upgrade():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": json.dumps({"succeeded": False, "errorCode": "Unknown"})})
+    cur = get_user_currency(username)
+    return jsonify({"payload": json.dumps({
+        "succeeded": True, "errorCode": "None",
+        "stashCols": 8, "stashRows": 8,
+        "wallet": {"softCurrency": cur.get("nuts", 9999999), "hardCurrency": cur.get("cc", 9999999), "researchPoints": cur.get("rp", 9999999)},
+        "inventoryUpgrades": [],
+    })})
+
+@app.route("/v2/rpc/quest.complete", methods=["POST", "GET"])
+def quests_complete():
+    return jsonify({"payload": json.dumps({"version": 1, "completed": []})})
+
+@app.route("/v2/rpc/dailyMission.schedule", methods=["GET", "POST"])
+def daily_missions_get_schedule():
+    from datetime import timedelta
+    now = int(time.time())
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return jsonify({"payload": json.dumps({
+        "dailyMissionDateKey": today,
+        "dailyMissions": ["daily_reward", "daily_sell_items", "daily_kill_monsters"],
+        "dailyMissionResetTime": int(tomorrow.timestamp()),
+        "currentTime": now,
+    })})
+
+@app.route("/v2/rpc/dailyMission.getData", methods=["POST", "GET"])
+def daily_missions_get_data():
+    body = request.get_json(silent=True) or {}
+    payload_raw = body.get("payload", body)
+    if isinstance(payload_raw, str):
+        try:
+            payload_raw = json.loads(payload_raw)
+        except Exception:
+            payload_raw = {}
+    mission_ids = payload_raw.get("missionIDs", [])
+    missions = [{
+        "id": mid,
+        "name": mid.replace("_", " ").title(),
+        "description": f"Complete the {mid} mission",
+        "rewardHard": 50,
+        "rewardResearchPoints": 5,
+        "taskType": "DailyReward",
+        "args": [],
+    } for mid in mission_ids]
+    return jsonify({"payload": json.dumps({"missions": missions})})
+
+@app.route("/v2/rpc/dailyMission.progress", methods=["POST", "GET"])
+def daily_missions_get_progress():
+    return jsonify({"payload": json.dumps({"progress": []})})
+
+@app.route("/v2/rpc/dailyMission.reportProgress", methods=["POST", "GET"])
+def daily_missions_report_progress():
+    return jsonify({"payload": json.dumps({"succeeded": True, "errorCode": "None"})})
+
+@app.route("/v2/rpc/dailyMission.collect", methods=["POST", "GET"])
+def daily_missions_collect_reward():
+    username = _toast_auth() or _get_username_from_request()
+    cur = get_user_currency(username) if username else {}
+    return jsonify({"payload": json.dumps({
+        "succeeded": True, "errorCode": "None",
+        "wallet": {"softCurrency": cur.get("nuts", 9999999), "hardCurrency": cur.get("cc", 9999999), "researchPoints": cur.get("rp", 9999999)},
+        "rewardHardCurrency": 50,
+        "rewardResearchPoints": 5,
+    })})
+
+@app.route("/v2/rpc/scavengerHunt.progress", methods=["POST", "GET"])
+def scavenger_hunt_get_progress():
+    return jsonify({"payload": json.dumps({"itemIDs": [], "completed": False, "collected": False})})
+
+@app.route("/v2/rpc/scavengerHunt.reportProgress", methods=["POST", "GET"])
+@app.route("/v2/rpc/scavengerHunt.report", methods=["POST", "GET"])
+def scavenger_hunt_report_progress():
+    username = _toast_auth() or _get_username_from_request()
+    cur = get_user_currency(username) if username else {}
+    return jsonify({"payload": json.dumps({
+        "succeeded": True, "completed": False, "errorCode": "None",
+        "wallet": {"softCurrency": cur.get("nuts", 9999999), "hardCurrency": cur.get("cc", 9999999), "researchPoints": cur.get("rp", 9999999)},
+        "rewardHardCurrency": 0,
+    })})
+
+@app.route("/v2/rpc/scavengerHunt.collect", methods=["POST", "GET"])
+def scavenger_hunt_collect_reward():
+    username = _toast_auth() or _get_username_from_request()
+    cur = get_user_currency(username) if username else {}
+    return jsonify({"payload": json.dumps({
+        "succeeded": True, "errorCode": "None",
+        "wallet": {"softCurrency": cur.get("nuts", 9999999), "hardCurrency": cur.get("cc", 9999999), "researchPoints": cur.get("rp", 9999999)},
+        "rewardHardCurrency": 100,
+        "rewardResearchPoints": 10,
+    })})
+
+@app.route("/v2/rpc/privateRooms.get", methods=["POST", "GET"])
+def private_room_get():
+    return jsonify({"payload": json.dumps({
+        "succeeded": True, "errorCode": "None",
+        "privateRoom": {"code": "", "expiresAt": 0, "owner": "", "members": [], "settings": {}},
+        "bannedUsers": [],
+    })})
+
+@app.route("/v2/rpc/privateRooms.purchase", methods=["POST", "GET"])
+def private_room_purchase():
+    body = request.get_json(silent=True) or {}
+    payload_raw = body.get("payload", body)
+    if isinstance(payload_raw, str):
+        try:
+            payload_raw = json.loads(payload_raw)
+        except Exception:
+            payload_raw = {}
+    room_code = payload_raw.get("roomCode", secrets.token_hex(4).upper())
+    return jsonify({"payload": json.dumps({
+        "succeeded": True, "errorCode": "None",
+        "privateRoom": {"code": room_code, "expiresAt": int(time.time()) + 2592000, "owner": "", "members": [], "settings": {}},
+        "bannedUsers": [],
+    })})
+
+@app.route("/v2/rpc/privateRooms.update", methods=["POST", "GET"])
+@app.route("/v2/rpc/privateRooms.addMember", methods=["POST", "GET"])
+@app.route("/v2/rpc/privateRooms.removeMember", methods=["POST", "GET"])
+@app.route("/v2/rpc/privateRooms.kickUser", methods=["POST", "GET"])
+@app.route("/v2/rpc/privateRooms.banUser", methods=["POST", "GET"])
+def private_room_ops():
+    return jsonify({"payload": json.dumps({
+        "succeeded": True, "errorCode": "None",
+        "privateRoom": {"code": "", "expiresAt": 0, "owner": "", "members": [], "settings": {}},
+        "bannedUsers": [],
+    })})
+
+@app.route("/v2/rpc/report.user", methods=["POST", "GET"])
+def report_user():
+    return jsonify({"payload": "{}"})
+
+@app.route("/v2/rpc/room.ban", methods=["POST", "GET"])
+def room_ban_user():
+    return jsonify({"payload": "{}"})
+
+@app.route("/v2/rpc/mobile.getPairingCode", methods=["GET", "POST"])
+def mobile_get_pairing_code():
+    now = int(time.time())
+    return jsonify({"payload": json.dumps({"pairingCode": secrets.token_hex(4).upper(), "expiresAt": now + 300, "errorCode": 0})})
+
+@app.route("/v2/rpc/mobile.startLinkDevice", methods=["POST", "GET"])
+def mobile_start_link():
+    now = int(time.time())
+    return jsonify({"payload": json.dumps({"verificationCode": secrets.token_hex(3).upper(), "expiresAt": now + 300})})
+
+@app.route("/v2/rpc/mobile.confirmLinkDevice", methods=["POST", "GET"])
+def mobile_confirm_link():
+    return jsonify({"payload": json.dumps({})})
+
+@app.route("/v2/rpc/mobile.finishLinkDevice", methods=["POST", "GET"])
+def mobile_finish_link():
+    username = _toast_auth() or _get_username_from_request()
+    now = int(time.time())
+    return jsonify({"payload": json.dumps({
+        "deviceID": secrets.token_hex(8),
+        "secret": secrets.token_hex(16),
+        "password": secrets.token_hex(16),
+        "expiresAt": now + 31536000,
+        "userID": username or "",
+        "username": username or "",
+    })})
+
+@app.route("/v2/rpc/mobile.abortLinkDevice", methods=["POST", "GET"])
+def mobile_abort_link():
+    return jsonify({"payload": json.dumps({"errorCode": 0})})
+
+@app.route("/v2/friend", methods=["GET"])
+@app.route("/v2/friends", methods=["GET"])
+def list_friends():
+    return jsonify({"friends": [], "cursor": ""})
+
+@app.route("/v2/friend", methods=["POST"])
+def add_friends():
+    return jsonify({})
+
+@app.route("/v2/friend", methods=["DELETE"])
+@app.route("/v2/friend/block", methods=["POST"])
+def manage_friends():
+    return jsonify({})
+
+@app.route("/v2/notification", methods=["GET"])
+def list_notifications():
+    return jsonify({"notifications": [], "cacheable_cursor": ""})
+
+@app.route("/v2/notification", methods=["DELETE"])
+def delete_notifications():
+    return jsonify({})
+
+@app.route("/v2/rpc/purchase.validate", methods=["POST", "GET"])
+@app.route("/v2/rpc/purchase.metaQuest", methods=["POST", "GET"])
+@app.route("/v2/rpc/purchase.validateMetaQuest", methods=["POST", "GET"])
+def purchase_validate():
+    username = _toast_auth() or _get_username_from_request()
+    body = request.get_json(silent=True) or {}
+    payload_raw = body.get("payload", body)
+    if isinstance(payload_raw, str):
+        try:
+            payload_raw = json.loads(payload_raw)
+        except Exception:
+            payload_raw = {}
+    transaction_id = (payload_raw.get("id") or payload_raw.get("transactionId") or payload_raw.get("ID") or secrets.token_hex(8))
+    return jsonify({"payload": json.dumps({"valid": True, "newPurchase": True, "id": transaction_id})})
+
+@app.route("/v2/rpc/AntiCheatCheck", methods=["POST"])
+def anti_cheat_check():
+    return jsonify({"payload": json.dumps({})})
+
+@app.route("/v2/rpc/attest.check", methods=["POST"])
+def attest_check():
+    now = int(time.time())
+    return jsonify({"payload": json.dumps({"isValid": True, "expiresAt": now + 36000})})
+
+@app.route("/v2/rpc/preferences.get", methods=["GET", "POST"])
+def preferences_get():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": "{}"})
+    item = get_user_items(username, "user_preferences", "settings")
+    val = item.get("value", "{}") if item else "{}"
+    return jsonify({"payload": val})
+
+@app.route("/v2/rpc/preferences.set", methods=["POST", "GET"])
+def preferences_set():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": "{}"})
+    body = request.get_json(silent=True) or {}
+    payload_raw = body.get("payload", body)
+    if isinstance(payload_raw, str):
+        try:
+            payload_raw = json.loads(payload_raw)
+        except Exception:
+            payload_raw = {}
+    save_user_items(username, {
+        "value": json.dumps(payload_raw),
+        "update_time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "version": secrets.token_hex(8)
+    }, "user_preferences", "settings")
+    return jsonify({"payload": "{}"})
+
+@app.route("/v2/rpc/preferences.getGameplayItems", methods=["GET", "POST"])
+def preferences_get_gameplay_items():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": "{}"})
+    item = get_user_items(username, "user_preferences", "gameplay_items")
+    val = item.get("value", json.dumps({"recents": [], "favorites": []})) if item else json.dumps({"recents": [], "favorites": []})
+    return jsonify({"payload": val})
+
+@app.route("/v2/rpc/preferences.setGameplayItems", methods=["POST", "GET"])
+def preferences_set_gameplay_items():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": "{}"})
+    body = request.get_json(silent=True) or {}
+    payload_raw = body.get("payload", body)
+    if isinstance(payload_raw, str):
+        try:
+            payload_raw = json.loads(payload_raw)
+        except Exception:
+            payload_raw = {}
+    save_user_items(username, {
+        "value": json.dumps(payload_raw),
+        "update_time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "version": secrets.token_hex(8)
+    }, "user_preferences", "gameplay_items")
+    return jsonify({"payload": "{}"})
+
+@app.route("/v2/rpc/preferences.getSkills", methods=["GET", "POST"])
+def preferences_get_skills():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": "{}"})
+    item = get_user_items(username, "user_preferences", "skills")
+    val = item.get("value", json.dumps({"disabledSkills": []})) if item else json.dumps({"disabledSkills": []})
+    return jsonify({"payload": val})
+
+@app.route("/v2/rpc/preferences.setSkills", methods=["POST", "GET"])
+def preferences_set_skills():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": "{}"})
+    body = request.get_json(silent=True) or {}
+    payload_raw = body.get("payload", body)
+    if isinstance(payload_raw, str):
+        try:
+            payload_raw = json.loads(payload_raw)
+        except Exception:
+            payload_raw = {}
+    save_user_items(username, {
+        "value": json.dumps(payload_raw),
+        "update_time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "version": secrets.token_hex(8)
+    }, "user_preferences", "skills")
+    return jsonify({"payload": "{}"})
+
+@app.route("/game-data-prod.zip", methods=["GET"])
+def game_data_prod():
+    game_data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "game-data-prod.zip")
+    if os.path.exists(game_data_path):
+        return send_file(game_data_path, mimetype="application/zip")
+    return jsonify({"error": "not found"}), 404
+
+@app.route("/v2/rpc/<path:rpc_id>", methods=["GET", "POST"])
+def rpc_catchall(rpc_id):
+    server_log(f"[RPC] Unhandled: {rpc_id} body={request.get_data(as_text=True)[:300]}")
+    return jsonify({"payload": "{}"})
 
 @app.errorhandler(404)
 def handle_404(e):
