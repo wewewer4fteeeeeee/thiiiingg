@@ -3,6 +3,7 @@ declare const System: any;
 declare const XRNode: any;
 declare const Random: any;
 declare const UnityEngine: any;
+declare const console: any;
 
 let rigidbody: any = null
 let hue = 0;
