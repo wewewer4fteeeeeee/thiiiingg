@@ -1388,18 +1388,8 @@ def link_device():
     }), 200
 
 @app.route("/api/v1/preauth", methods=["POST"])
-def preauth():
-    body = request.get_json() or {}
-    return jsonify({
-        "time": ilowkeydontknowwhy(),
-        "updateType": "1.36.2.1622_828307",
-        "attestID": str(uuid.uuid4()),
-        "attestNonce": skidatoken(
-            body.get("platformUserID", ""),
-            request.headers.get("X-Device-Id", ""),
-            request.headers.get("User-Agent", ""),
-        ),
-    })
+def fghhfghfghfghfghfgfgh():
+    return jsonify({"attestID":"f28d7890-481b-4f90-a08f-287314e8be02","attestNonce":"4sWoVMCRma5Q9bLMmxksMJkHG5pgdG_k","time":1756899975,"updateType":"None"})
 
 SPECIAL_USERS = {
     "unitygame": {"id": "8c1acc32f2454fb9a9a76fb6dfbf572f", "username": "<color=purple>Exploding_Car</color>", "display_name": "<color=purple>Exploding_Car</color>", "meta": {"isDeveloper": True}, "wallet": {"hardCurrency": 99999999999, "softCurrency": 99999999999, "researchPoints": 9999999999}},
