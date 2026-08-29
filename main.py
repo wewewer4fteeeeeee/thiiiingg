@@ -20,7 +20,7 @@ from flask import Flask, jsonify, request, session as flask_session, g, send_fil
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
 
-GAME_DATA_ZIP_URL = "https://github.com/Alphamageddon/Animal-Company-Copy-Tutorial/raw/refs/heads/main/game-data/Zombie%20Update.zip"
+GAME_DATA_ZIP_URL = "https://raw.githubusercontent.com/Alphamageddon/Animal-Company-Copy-Tutorial/refs/heads/main/game-data/Mining%20Update.zip"
 META_APP_TOKEN = "OC|9014197565357495|14d90662e4f2cfdc4878a6ca7937567e"
 EXPECTED_PACKAGE = "com.Sunday.Taggers"
 SECRET_KEY = "hgdfsdjhcgshdgfcsdhjghjgsdfjhsd"
@@ -333,6 +333,11 @@ def get_user_avatar(username):
     avatars = _load_avatars()
     return avatars.get(username)
 
+def get_econ_data(collection_name):
+    """Get econ data from the game data cache"""
+    data = get_game_data(collection_name)
+    return data if data else []
+
 def save_user_avatar(username, avatar_data):
     avatars = _load_avatars()
     if not isinstance(avatars, dict):
@@ -362,6 +367,31 @@ def _save_items(items):
     except Exception:
         return False
 
+
+    # Add this helper function near the top of your file after the imports
+    def get_db():
+        import sqlite3
+        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'storage.db')
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        # Create storage table if it doesn't exist
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS storage (
+                user_id TEXT,
+                collection TEXT,
+                key TEXT,
+                value TEXT,
+                version TEXT,
+                permission_read INTEGER,
+                permission_write INTEGER,
+                create_time TEXT,
+                update_time TEXT,
+                PRIMARY KEY (user_id, collection, key)
+            )
+        ''')
+        conn.commit()
+        return conn
+        
 def get_user_items(username, collection='user_inventory', key='avatar'):
     items = _load_items()
     user_data = items.get(username, {})
@@ -832,6 +862,45 @@ def set_user_data_bulk(username, updates):
     db[username].update(updates)
     save_data(db)
 
+def get_all_user_data(username):
+    db = load_data()
+    return db.get(username, {})
+
+def _build_user_objects(username, udata):
+    now = "2025-01-01T00:00:00Z"
+    user_id = udata.get("user_id") or str(uuid.uuid4())
+
+    saved_avatar = get_user_avatar(username)
+    avatar_value = saved_avatar.get('value') if saved_avatar and 'value' in saved_avatar else '{}'
+
+    inv_avatar_value = default_avatar_inventory()
+
+    saved_stash = get_user_items(username, 'user_inventory', 'stash')
+    stash_value = saved_stash.get('value') if saved_stash and 'value' in saved_stash else DEFAULT_STASH
+
+    saved_loadout = get_user_items(username, 'user_inventory', 'gameplay_loadout')
+    if saved_loadout and saved_loadout.get('value'):
+        loadout_value = saved_loadout['value']
+    else:
+        generated = _generate_random_loadout()
+        loadout_value = generated['objects'][0]['value']
+        save_user_items(username, {
+            'value': loadout_value,
+            'update_time': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+            'version': secrets.token_hex(8)
+        }, 'user_inventory', 'gameplay_loadout')
+
+    return {"objects": [
+        {"collection": "user_avatar", "key": "0", "user_id": user_id, "value": avatar_value, "version": "e897bbeb9a5d4364d73dee44c2d4e6e4", "permission_read": 2, "create_time": now, "update_time": now},
+        {"collection": "user_inventory", "key": "avatar", "user_id": user_id, "value": inv_avatar_value, "version": "277a87beb4905dbe2333d5cd55a7e5be", "permission_read": 1, "create_time": now, "update_time": now},
+        {"collection": "user_inventory", "key": "research", "user_id": user_id, "value": default_research_inventory(), "version": "58c1d1c4ade0e8e205939be8a07ce49b", "permission_read": 1, "create_time": now, "update_time": now},
+        {"collection": "user_inventory", "key": "stash", "user_id": user_id, "value": stash_value, "version": "d1315c03b540bef68ce4742d46e77cc0", "permission_read": 1, "permission_write": 1, "create_time": now, "update_time": now},
+        {"collection": "user_inventory", "key": "stash_upgrades", "user_id": user_id, "value": DEFAULT_STASH_UPGRADES, "version": "af1feb89bd8c849f5f16a4754577be04", "permission_read": 1, "create_time": now, "update_time": now},
+        {"collection": "user_inventory", "key": "gameplay_loadout", "user_id": user_id, "value": loadout_value, "version": "3846efa925d304495efbfed41eaafe74", "permission_read": 1, "permission_write": 1, "create_time": now, "update_time": now},
+        {"collection": "user_preferences", "key": "gameplay_items", "user_id": user_id, "value": _val(udata, "user_preferences", "gameplay_items", DEFAULT_GAMEPLAY_PREFS), "version": "fe9acf47fd31aeb3ea1aa209e6485ce3", "permission_read": 1, "permission_write": 1, "create_time": now, "update_time": now},
+        {"collection": "user_preferences", "key": "common", "user_id": user_id, "value": _val(udata, "user_preferences", "common", DEFAULT_COMMON_PREFS), "version": "d56295314bb7a4c43e13da9c446a77a8", "permission_read": 1, "permission_write": 1, "create_time": now, "update_time": now},
+    ]}
+
 def get_wallet(username):
     d = get_user_data(username)
     return d.get("wallet", {
@@ -960,6 +1029,24 @@ def block_kick():
     if any(t in _path or t in _payload or t in _body for t in _KICK_TERMS):
         return jsonify({"error": "forbidden", "reason": "RPC_KickPlayer is disabled on this server"}), 403
 
+
+@app.before_request
+def log_storage_requests():
+    if request.path in ["/v2/storage", "/3/v2/storage", "/nnnnaakamacloud.c/v2/storage"]:
+        print(f"\n{'='*60}")
+        print(f"[STORAGE REQUEST] {request.method} {request.path}")
+        print(f"Headers: {dict(request.headers)}")
+        print(f"Args: {dict(request.args)}")
+        try:
+            body = request.get_json(silent=True)
+            if body:
+                print(f"Body: {json.dumps(body, indent=2)[:1000]}")
+            else:
+                print(f"Body: {request.get_data(as_text=True)[:500]}")
+        except:
+            print(f"Body: {request.get_data(as_text=True)[:500]}")
+        print(f"{'='*60}")
+
 @app.before_request
 def check_ip_ban():
     client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
@@ -1020,18 +1107,14 @@ def _build_storage_objects(username):
     user_id = udata.get("user_id") or str(uuid.uuid4())
     set_user_data(username, "user_id", user_id)
 
-    # Equipped avatar — load saved or use empty dict
     saved_avatar = get_user_avatar(username)
     avatar_value = saved_avatar.get('value') if saved_avatar and 'value' in saved_avatar else '{}'
 
-    # Cosmetic inventory — ALWAYS all items, no promo needed
     inv_avatar_value = default_avatar_inventory()
 
-    # Stash — load saved or empty
     saved_stash = get_user_items(username, 'user_inventory', 'stash')
     stash_value = saved_stash.get('value') if saved_stash and 'value' in saved_stash else DEFAULT_STASH
 
-    # Gameplay loadout — load saved; if none, generate a real one and save it so it sticks
     saved_loadout = get_user_items(username, 'user_inventory', 'gameplay_loadout')
     if saved_loadout and saved_loadout.get('value'):
         loadout_value = saved_loadout['value']
@@ -1116,8 +1199,6 @@ def BearerGeneration(username):
     }
     token = f"{b64encode_json(header)}.{b64encode_json(payload)}.{secrets.token_urlsafe(32)}"
 
-    # Provision full cosmetic inventory + research on every login
-    # Only writes to the inventory list (pp_items.json) — never touches the equipped avatar (pp_avatar.json)
     all_items = get_all_avatar_item_ids() or FALLBACK_AVATAR_ITEM_IDS
     save_user_items(username, {
         'value': json.dumps({"items": all_items}),
@@ -1426,17 +1507,29 @@ def friends():
     }],
     "cursor": "M_-DAwEBDmVkZ2VMaXN0Q3Vyc29yAf-EAAECAQVTdGF0ZQEEAAEIUG9zaXRpb24BBAAAAA3_hAL4MIT4gPadsnQA"})
 
+@app.route("/v2/storage/econ_mining_ores", methods=["GET", "POST", "PUT"])
+@app.route("/3/v2/storage/econ_mining_ores", methods=["GET", "POST", "PUT"])
+def econ_mining_ores():
+    return jsonify(_build_econ_objects("econ_mining_ores", get_game_data("econ_mining_ores")))
+
+
 @app.route("/3/v2/storage", methods=["GET", "POST", "PUT"])
 @app.route("/v2/storage", methods=["GET", "POST", "PUT"])
 @app.route("/nnnnaakamacloud.c/v2/storage", methods=["GET", "POST", "PUT"])
 def storage():
+    print("\n" + "="*80)
+    print("[STORAGE] === REQUEST START ===")
+    print(f"[STORAGE] Method: {request.method}")
+    print(f"[STORAGE] Path: {request.path}")
+
     token = request.args.get("token", "") or request.headers.get("Authorization", "")
     if token.startswith("Bearer "):
         token = token.split(" ", 1)[1]
+
     try:
         payload = b64decode_json(token.split(".")[1])
         username = payload.get("usn", "unknown")
-    except Exception:
+    except Exception as e:
         username = _toast_auth() or "unknown"
 
     if check_ban(username):
@@ -1446,77 +1539,289 @@ def storage():
     is_mod = str(username).strip().lower() in {m.strip().lower() for m in get_mod_users()} or username == MOD_USER
     is_dev = str(username).strip().lower() in {d.strip().lower() for d in get_dev_users()}
 
-    if request.method in ("PUT", "POST"):
-        if username and _is_rate_limited(f"storage_write:{username}", max_requests=30, window_seconds=60):
-            return _rate_limit_response()
-        body = request.get_json(silent=True) or {}
-        objects = body.get("objects", [])
-        if objects:
-            updates = {}
-            for obj in objects:
-                col = obj.get("collection", "")
-                key = obj.get("key", "")
-                val = obj.get("value", "")
-                if isinstance(val, (dict, list)):
-                    val = json.dumps(val)
-                updates[f"{col}:{key}"] = val
+    if request.method == "POST":
+        raw_body = request.get_data(as_text=True)
+        print(f"[STORAGE] Raw body: {raw_body[:500]}")
 
-                if col == 'user_avatar' and username:
-                    try:
-                        av = json.loads(val) if isinstance(val, str) else val
-                        if isinstance(av, dict):
-                            items = av.get('items') if isinstance(av.get('items'), list) else []
-                            if not items:
-                                for fld in ('head', 'eyeLeft', 'eyeRight', 'torso', 'armLeft', 'armRight', 'butt', 'tail'):
-                                    v = av.get(fld)
-                                    if v:
-                                        items.append(v)
-                                accs = av.get('accessories', [])
-                                if isinstance(accs, list):
-                                    for a in accs:
-                                        if a and a not in items:
-                                            items.append(a)
-                            items = replace_avatar_items_by_slot([], items)
-                            av = apply_items_to_avatar_fields(av, items)
-                            av = enforce_mop_hat_policy(av, is_mod)
-                            av = enforce_dev_policy(av, is_dev)
-                            save_user_avatar(username, {
-                                'value': json.dumps(av),
-                                'update_time': obj.get('update_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())),
-                                'version': obj.get('version', secrets.token_hex(8))
+        try:
+            body = request.get_json(force=True, silent=False)
+        except Exception as e:
+            print(f"[STORAGE] JSON parse error: {e}")
+            body = {}
+
+        object_ids = body.get("object_ids", []) if body else []
+        print(f"[STORAGE] object_ids: {object_ids}")
+
+        if object_ids:
+            results = []
+
+            for obj_id in object_ids:
+                collection = obj_id.get("collection", "")
+                key = obj_id.get("key", "")
+                user_id = obj_id.get("user_id", target_user)
+
+                print(f"[STORAGE] collection: '{collection}', key: '{key}'")
+
+                if collection.startswith("econ_"):
+                    econ_data = get_game_data(collection)
+                    print(f"[STORAGE] econ_data type: {type(econ_data)}")
+                    print(f"[STORAGE] econ_data length: {len(econ_data) if econ_data else 0}")
+
+                    # DEBUG: Print the actual data to see structure
+                    if econ_data:
+                        print(f"[STORAGE] econ_data content: {json.dumps(econ_data)[:500]}")
+
+                    if econ_data and len(econ_data) > 0:
+                        # Check if it's a list or dict
+                        if isinstance(econ_data, dict):
+                            # If it's a dict with items
+                            items_list = econ_data.get("items", [])
+                            if items_list:
+                                for item in items_list:
+                                    item_id = item.get("id") or item.get("ItemId") or item.get("itemID") or "unknown"
+                                    results.append({
+                                        "collection": collection,
+                                        "key": item_id,
+                                        "user_id": "00000000-0000-0000-0000-000000000000",
+                                        "value": json.dumps(item),
+                                        "version": "5c8518bd84cdb43a4e057cb62ca8d5b1",
+                                        "permission_read": 2,
+                                        "create_time": "2025-05-28T16:03:59Z",
+                                        "update_time": "2025-05-28T16:03:59Z"
+                                    })
+                            else:
+                                # Maybe it's a single config object
+                                results.append({
+                                    "collection": collection,
+                                    "key": "config",
+                                    "user_id": "00000000-0000-0000-0000-000000000000",
+                                    "value": json.dumps(econ_data),
+                                    "version": "5c8518bd84cdb43a4e057cb62ca8d5b1",
+                                    "permission_read": 2,
+                                    "create_time": "2025-05-28T16:03:59Z",
+                                    "update_time": "2025-05-28T16:03:59Z"
+                                })
+                        else:
+                            # It's a list
+                            if key == "config":
+                                for item in econ_data:
+                                    item_id = item.get("id") or item.get("ItemId") or item.get("itemID") or "unknown"
+                                    results.append({
+                                        "collection": collection,
+                                        "key": item_id,
+                                        "user_id": "00000000-0000-0000-0000-000000000000",
+                                        "value": json.dumps(item),
+                                        "version": "5c8518bd84cdb43a4e057cb62ca8d5b1",
+                                        "permission_read": 2,
+                                        "create_time": "2025-05-28T16:03:59Z",
+                                        "update_time": "2025-05-28T16:03:59Z"
+                                    })
+                            else:
+                                found = False
+                                for item in econ_data:
+                                    item_id = item.get("id") or item.get("ItemId") or item.get("itemID") or item.get("ID")
+                                    if item_id == key:
+                                        results.append({
+                                            "collection": collection,
+                                            "key": key,
+                                            "user_id": "00000000-0000-0000-0000-000000000000",
+                                            "value": json.dumps(item),
+                                            "version": "5c8518bd84cdb43a4e057cb62ca8d5b1",
+                                            "permission_read": 2,
+                                            "create_time": "2025-05-28T16:03:59Z",
+                                            "update_time": "2025-05-28T16:03:59Z"
+                                        })
+                                        found = True
+                                        break
+                                if not found:
+                                    results.append({
+                                        "collection": collection,
+                                        "key": key,
+                                        "user_id": "00000000-0000-0000-0000-000000000000",
+                                        "value": "{}",
+                                        "version": secrets.token_hex(16),
+                                        "permission_read": 1,
+                                        "create_time": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                                        "update_time": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+                                    })
+                    else:
+                        results.append({
+                            "collection": collection,
+                            "key": key,
+                            "user_id": "00000000-0000-0000-0000-000000000000",
+                            "value": "{}",
+                            "version": secrets.token_hex(16),
+                            "permission_read": 1,
+                            "create_time": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                            "update_time": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+                        })
+                else:
+                    # User collections
+                    if collection == "user_avatar":
+                        saved = get_user_avatar(user_id)
+                        if saved and saved.get('value'):
+                            results.append({
+                                "collection": collection,
+                                "key": key,
+                                "user_id": user_id,
+                                "value": saved['value'],
+                                "version": saved.get('version', secrets.token_hex(16)),
+                                "permission_read": 2,
+                                "create_time": saved.get('create_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())),
+                                "update_time": saved.get('update_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
                             })
-                    except Exception:
-                        pass
+                        else:
+                            results.append({
+                                "collection": collection,
+                                "key": key,
+                                "user_id": user_id,
+                                "value": "{}",
+                                "version": secrets.token_hex(16),
+                                "permission_read": 1,
+                                "create_time": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                                "update_time": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+                            })
+                    elif collection == "user_inventory":
+                        saved = get_user_items(user_id, collection, key)
+                        if saved and saved.get('value'):
+                            results.append({
+                                "collection": collection,
+                                "key": key,
+                                "user_id": user_id,
+                                "value": saved['value'],
+                                "version": saved.get('version', secrets.token_hex(16)),
+                                "permission_read": 1,
+                                "permission_write": 1,
+                                "create_time": saved.get('create_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())),
+                                "update_time": saved.get('update_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
+                            })
+                        else:
+                            results.append({
+                                "collection": collection,
+                                "key": key,
+                                "user_id": user_id,
+                                "value": "{}",
+                                "version": secrets.token_hex(16),
+                                "permission_read": 1,
+                                "permission_write": 1,
+                                "create_time": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                                "update_time": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+                            })
+                    elif collection == "user_preferences":
+                        saved = get_user_items(user_id, collection, key)
+                        if saved and saved.get('value'):
+                            results.append({
+                                "collection": collection,
+                                "key": key,
+                                "user_id": user_id,
+                                "value": saved['value'],
+                                "version": saved.get('version', secrets.token_hex(16)),
+                                "permission_read": 1,
+                                "permission_write": 1,
+                                "create_time": saved.get('create_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())),
+                                "update_time": saved.get('update_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
+                            })
+                        else:
+                            results.append({
+                                "collection": collection,
+                                "key": key,
+                                "user_id": user_id,
+                                "value": "{}",
+                                "version": secrets.token_hex(16),
+                                "permission_read": 1,
+                                "permission_write": 1,
+                                "create_time": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                                "update_time": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+                            })
+                    else:
+                        results.append({
+                            "collection": collection,
+                            "key": key,
+                            "user_id": user_id,
+                            "value": "{}",
+                            "version": secrets.token_hex(16),
+                            "permission_read": 1,
+                            "create_time": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                            "update_time": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+                        })
 
-                if col == 'user_inventory' and key == 'stash' and username:
-                    save_user_items(username, {
-                        'value': val,
-                        'update_time': obj.get('update_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())),
-                        'version': obj.get('version', secrets.token_hex(8))
-                    }, 'user_inventory', 'stash')
+            response_data = {"objects": results}
+            print(f"[STORAGE] Returning {len(results)} objects")
+        else:
+            # Write operations
+            objects = body.get("objects", []) if body else []
+            if objects:
+                updates = {}
+                for obj in objects:
+                    col = obj.get("collection", "")
+                    key = obj.get("key", "")
+                    val = obj.get("value", "")
+                    if isinstance(val, (dict, list)):
+                        val = json.dumps(val)
 
-                if col == 'user_inventory' and key == 'gameplay_loadout' and username:
-                    save_user_items(username, {
-                        'value': val,
-                        'update_time': obj.get('update_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())),
-                        'version': obj.get('version', secrets.token_hex(8))
-                    }, 'user_inventory', 'gameplay_loadout')
+                    if col == 'user_avatar' and username:
+                        try:
+                            av = json.loads(val) if isinstance(val, str) else val
+                            if isinstance(av, dict):
+                                items = av.get('items') if isinstance(av.get('items'), list) else []
+                                if not items:
+                                    for fld in ('head', 'eyeLeft', 'eyeRight', 'torso', 'armLeft', 'armRight', 'butt', 'tail'):
+                                        v = av.get(fld)
+                                        if v:
+                                            items.append(v)
+                                    accs = av.get('accessories', [])
+                                    if isinstance(accs, list):
+                                        for a in accs:
+                                            if a and a not in items:
+                                                items.append(a)
+                                items = replace_avatar_items_by_slot([], items)
+                                av = apply_items_to_avatar_fields(av, items)
+                                av = enforce_mop_hat_policy(av, is_mod)
+                                av = enforce_dev_policy(av, is_dev)
+                                save_user_avatar(username, {
+                                    'value': json.dumps(av),
+                                    'update_time': obj.get('update_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())),
+                                    'version': obj.get('version', secrets.token_hex(8))
+                                })
+                        except Exception as e:
+                            print(f"[STORAGE] Avatar update error: {e}")
 
-                if col == 'user_inventory' and key == 'avatar' and username:
-                    # Save inventory list to pp_items.json only — do NOT touch the equipped avatar
-                    save_user_items(username, {
-                        'value': val,
-                        'update_time': obj.get('update_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())),
-                        'version': obj.get('version', secrets.token_hex(8))
-                    }, 'user_inventory', 'avatar')
+                    if col == 'user_inventory' and key == 'stash' and username:
+                        save_user_items(username, {
+                            'value': val,
+                            'update_time': obj.get('update_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())),
+                            'version': obj.get('version', secrets.token_hex(8))
+                        }, 'user_inventory', 'stash')
 
-            set_user_data_bulk(username, updates)
-            return jsonify({"acks": [
-                {"collection": o.get("collection"), "key": o.get("key"), "version": secrets.token_hex(16)}
-                for o in objects
-            ]}), 200
+                    if col == 'user_inventory' and key == 'gameplay_loadout' and username:
+                        save_user_items(username, {
+                            'value': val,
+                            'update_time': obj.get('update_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())),
+                            'version': obj.get('version', secrets.token_hex(8))
+                        }, 'user_inventory', 'gameplay_loadout')
 
-    return jsonify(_build_storage_objects(target_user))
+                    if col == 'user_inventory' and key == 'avatar' and username:
+                        save_user_items(username, {
+                            'value': val,
+                            'update_time': obj.get('update_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())),
+                            'version': obj.get('version', secrets.token_hex(8))
+                        }, 'user_inventory', 'avatar')
+
+                    set_user_data_bulk(username, updates)
+
+                response_data = {"acks": [
+                    {"collection": o.get("collection"), "key": o.get("key"), "version": secrets.token_hex(16)}
+                    for o in objects
+                ]}
+            else:
+                response_data = _build_storage_objects(target_user)
+    else:
+        response_data = _build_storage_objects(target_user)
+
+    response = jsonify(response_data)
+    print(f"[STORAGE] Response objects: {len(response_data.get('objects', []))}")
+    print("="*80 + "\n")
+    return response, 200
 
 @app.route("/3/v2/storage/econ_avatar_items", methods=["GET", "POST", "PUT"])
 @app.route("/v2/storage/econ_avatar_items", methods=["GET", "POST", "PUT"])
@@ -1531,7 +1836,7 @@ def econ_avatar_items():
     for item in econ_data:
         item_id = item.get('id')
         if item_id == 'acc_head_mop' and not is_mod:
-            continue  # mods only
+            continue
         item = dict(item)
         item['unlocked'] = True
         filtered.append(item)
@@ -1624,6 +1929,32 @@ def research_unlock():
     if username:
         update_user_currency(username, rp=418291, nuts=418291, cc=418291)
     return {"payload": "{\"succeeded\":true,\"wallet\":{\"softCurrency\":418291,\"hardCurrency\":418291,\"researchPoints\":418291}}"}
+
+@app.route("/v2/rpc/research.item", methods=["POST", "GET"])
+def research_item():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": json.dumps({"succeeded": False, "errorCode": "Unknown"})})
+    all_nodes = get_all_research_node_ids() or []
+    cur = get_user_currency(username)
+    return jsonify({"payload": json.dumps({
+        "succeeded": True, "errorCode": "None",
+        "wallet": {"softCurrency": cur.get("nuts", 9999999), "hardCurrency": cur.get("cc", 9999999), "researchPoints": cur.get("rp", 9999999)},
+        "inventoryResearchNodes": all_nodes,
+    })})
+
+@app.route("/v2/rpc/research.skill", methods=["POST", "GET"])
+def research_skill():
+    username = _toast_auth() or _get_username_from_request()
+    if not username:
+        return jsonify({"payload": json.dumps({"succeeded": False, "errorCode": "Unknown"})})
+    all_nodes = get_all_research_node_ids() or []
+    cur = get_user_currency(username)
+    return jsonify({"payload": json.dumps({
+        "succeeded": True, "errorCode": "None",
+        "wallet": {"softCurrency": cur.get("nuts", 9999999), "hardCurrency": cur.get("cc", 9999999), "researchPoints": cur.get("rp", 9999999)},
+        "inventoryResearchNodes": all_nodes,
+    })})
 
 @app.route("/3/v2/rpc/promo.redeem", methods=["POST", "GET"])
 @app.route("/v2/rpc/promo.redeem", methods=["POST", "GET"])
@@ -1825,8 +2156,8 @@ def client_bootstrap():
     payload = {
         "updateType": "None", "attestResult": "Valid",
         "attestTokenExpiresAt": 1820877961,
-        "photonAppID": "8049869d-4304-491e-b844-e77fdf5df0e4",
-        "photonVoiceAppID": "9aea8f08-e6d9-4a1c-9934-cbca4142c479",
+        "photonAppID": "",
+        "photonVoiceAppID": "",
         "metadataHash": "3225b4ed43082cec01c79acd8b1c09ea335f77870663342a5dededf6f4979f66",
         "termsAcceptanceNeeded": [], "dailyMissionDateKey": "",
         "dailyMissions": None, "dailyMissionResetTime": 0,
@@ -2202,7 +2533,7 @@ def storage_get():
     username = _toast_auth() or _get_username_from_request()
     if not username:
         return jsonify({"error": "unauthorized"}), 401
-    udata = get_all_user_data(username) if hasattr(__builtins__, '__import__') else {}
+    udata = get_all_user_data(username)
     objects = _build_user_objects(username, udata).get("objects", [])
     return jsonify({"objects": objects})
 
@@ -2256,7 +2587,7 @@ def get_bulk_user_data():
     username = _toast_auth() or _get_username_from_request()
     if not username:
         return jsonify({"payload": "{}"})
-    udata = get_all_user_data(username) if callable(getattr(__builtins__, '__import__', None)) else {}
+    udata = get_all_user_data(username)
     objs = _build_user_objects(username, udata).get("objects", [])
 
     def _read(coll, key, default):
@@ -2306,17 +2637,6 @@ def avatar_get_avatars():
             except Exception:
                 result_avatars.append({})
     return jsonify({"payload": json.dumps({"userIDs": result_ids, "avatars": result_avatars})})
-
-@app.route("/v2/rpc/mining.balance", methods=["GET", "POST"])
-def mining_balance():
-    username = _toast_auth() or _get_username_from_request()
-    if not username:
-        return jsonify({"payload": json.dumps({"hardCurrency": 0.0, "researchPoints": 0.0})})
-    cur = get_user_currency(username)
-    return jsonify({"payload": json.dumps({
-        "hardCurrency": float(cur.get("cc", 9999999)),
-        "researchPoints": float(cur.get("rp", 9999999)),
-    })})
 
 @app.route("/v2/rpc/mining.collect", methods=["POST", "GET"])
 def mining_collect():
@@ -2443,21 +2763,6 @@ def purchase_research_points():
     return jsonify({"payload": json.dumps({
         "succeeded": True, "errorCode": "None",
         "wallet": {"softCurrency": cur.get("nuts", 9999999), "hardCurrency": cur.get("cc", 9999999), "researchPoints": cur.get("rp", 9999999)},
-    })})
-
-@app.route("/v2/rpc/research.unlock", methods=["POST", "GET"])
-@app.route("/v2/rpc/research.item", methods=["POST", "GET"])
-@app.route("/v2/rpc/research.skill", methods=["POST", "GET"])
-def research_unlock():
-    username = _toast_auth() or _get_username_from_request()
-    if not username:
-        return jsonify({"payload": json.dumps({"succeeded": False, "errorCode": "Unknown"})})
-    all_nodes = get_all_research_node_ids() or []
-    cur = get_user_currency(username)
-    return jsonify({"payload": json.dumps({
-        "succeeded": True, "errorCode": "None",
-        "wallet": {"softCurrency": cur.get("nuts", 9999999), "hardCurrency": cur.get("cc", 9999999), "researchPoints": cur.get("rp", 9999999)},
-        "inventoryResearchNodes": all_nodes,
     })})
 
 @app.route("/v2/rpc/purchase.upgrade", methods=["POST", "GET"])
