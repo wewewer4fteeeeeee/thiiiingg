@@ -1387,7 +1387,7 @@ def link_device():
         "create_time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }), 200
 
-@app.route("/nnnnaakamacloud/api/v1/preauth", methods=["POST"])
+@app.route("/api/v1/preauth", methods=["POST"])
 def preauth():
     body = request.get_json() or {}
     return jsonify({
