@@ -16,18 +16,20 @@ import string
 import ipaddress
 from datetime import datetime, timezone
 from flask import Flask, jsonify, request, session as flask_session, g, send_file
-
+import logging
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
 
-GAME_DATA_ZIP_URL = "https://raw.githubusercontent.com/Alphamageddon/Animal-Company-Copy-Tutorial/refs/heads/main/game-data/Mining%20Update.zip"
+GAME_DATA_ZIP_URL = "https://cdn.discordapp.com/attachments/1523170721013039104/1543415176752267285/game-data-prod2_3.zip?ex=6a94c8e5&is=6a937765&hm=2d81e3f47ab1b37100635bd2c6f863129be95c45dd721af0e46271a62f6dd518&"
 META_APP_TOKEN = "OC|9014197565357495|14d90662e4f2cfdc4878a6ca7937567e"
 EXPECTED_PACKAGE = "com.Sunday.Taggers"
 SECRET_KEY = "hgdfsdjhcgshdgfcsdhjghjgsdfjhsd"
-
+logger = logging.getLogger(__name__)
 _session_store = {}
 _session_store_lock = threading.Lock()
 _user_active_sid = {}
+_uid_to_username = {}
+_uid_to_username_lock = threading.Lock()
 MAX_SESSION_LIFETIME = 2 * 3600
 TOKEN_TTL = 3600
 
@@ -391,7 +393,7 @@ def _save_items(items):
         ''')
         conn.commit()
         return conn
-        
+
 def get_user_items(username, collection='user_inventory', key='avatar'):
     items = _load_items()
     user_data = items.get(username, {})
@@ -765,6 +767,11 @@ def enforce_dev_policy(avatar, is_dev):
     avatar['accessories'] = [a for a in avatar.get('accessories', []) if a in access or _is_accessory(a)]
     return avatar
 
+def _resolve_username_from_uid(uid, fallback=None):
+    """Resolve a JWT uid (hex UUID) to the stored username string."""
+    with _uid_to_username_lock:
+        return _uid_to_username.get(uid, fallback)
+
 def _register_session(session_id, username):
     now = int(time.time())
     with _session_store_lock:
@@ -809,11 +816,7 @@ def _load_zip_from_url(url):
 def get_game_data(key):
     if not _game_data_cache:
         _game_data_cache.update(_load_zip_from_url(GAME_DATA_ZIP_URL))
-    data = _game_data_cache.get(key, [])
-    if not data:
-        _game_data_cache.update(_load_zip_from_url(GAME_DATA_ZIP_URL))
-        data = _game_data_cache.get(key, [])
-    return data
+    return _game_data_cache.get(key, [])
 
 def get_all_avatar_item_ids():
     return [item["id"] for item in get_game_data("econ_avatar_items")]
@@ -1074,16 +1077,10 @@ FALLBACK_AVATAR_ITEM_IDS = ["acc_ear_l_earring_banana","acc_face_cybersuit_helme
 
 def default_avatar_inventory():
     items = get_all_avatar_item_ids()
-    if not items:
-        _game_data_cache.update(_load_zip_from_url(GAME_DATA_ZIP_URL))
-        items = get_all_avatar_item_ids()
     return json.dumps({"items": items or FALLBACK_AVATAR_ITEM_IDS})
 
 def default_research_inventory():
     nodes = get_all_research_node_ids()
-    if not nodes:
-        _game_data_cache.update(_load_zip_from_url(GAME_DATA_ZIP_URL))
-        nodes = get_all_research_node_ids()
     return json.dumps({"nodes": nodes})
 
 def _val(udata, col, key, default_fn):
@@ -1188,6 +1185,8 @@ def BearerGeneration(username):
     tid = "f6ac88a5575546c2b2b7ca93d3e3f488" if username == "unitygame" else uuid.uuid4().hex
     sid = secrets.token_hex(16)
     _register_session(sid, username)
+    with _uid_to_username_lock:
+        _uid_to_username[uid] = username
     payload = {
         "tid": tid, "uid": uid, "usn": username, "sid": sid,
         "vrs": {
@@ -1387,6 +1386,8 @@ def link_device():
         "create_time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }), 200
 
+
+
 @app.route("/api/v1/preauth", methods=["POST"])
 def fghhfghfghfghfghfgfgh():
     return jsonify({"attestID":"f28d7890-481b-4f90-a08f-287314e8be02","attestNonce":"4sWoVMCRma5Q9bLMmxksMJkHG5pgdG_k","time":1756899975,"updateType":"None"})
@@ -1501,6 +1502,50 @@ def friends():
 @app.route("/3/v2/storage/econ_mining_ores", methods=["GET", "POST", "PUT"])
 def econ_mining_ores():
     return jsonify(_build_econ_objects("econ_mining_ores", get_game_data("econ_mining_ores")))
+    @app.route("/v2/storage/econ_skill_tree", methods=["GET", "POST", "PUT"])
+    @app.route("/3/v2/storage/econ_skill_tree", methods=["GET", "POST", "PUT"])
+    def econ_skill_tree():
+        return jsonify(_build_econ_objects("econ_skill_tree", get_game_data("econ_skill_tree")))
+
+    @app.route("/v2/storage/econ_upgrades", methods=["GET", "POST", "PUT"])
+    @app.route("/3/v2/storage/econ_upgrades", methods=["GET", "POST", "PUT"])
+    def econ_upgrades():
+        return jsonify(_build_econ_objects("econ_upgrades", get_game_data("econ_upgrades")))
+
+    @app.route("/v2/storage/econ_events", methods=["GET", "POST", "PUT"])
+    @app.route("/3/v2/storage/econ_events", methods=["GET", "POST", "PUT"])
+    def econ_events():
+        return jsonify(_build_econ_objects("econ_events", get_game_data("econ_events")))
+
+    @app.route("/v2/storage/econ_pedestals", methods=["GET", "POST", "PUT"])
+    @app.route("/3/v2/storage/econ_pedestals", methods=["GET", "POST", "PUT"])
+    def econ_pedestals():
+        return jsonify(_build_econ_objects("econ_pedestals", get_game_data("econ_pedestals")))
+
+    @app.route("/v2/storage/econ_fast_travel_schedule", methods=["GET", "POST", "PUT"])
+    @app.route("/3/v2/storage/econ_fast_travel_schedule", methods=["GET", "POST", "PUT"])
+    def econ_fast_travel_schedule():
+        return jsonify(_build_econ_objects("econ_fast_travel_schedule", get_game_data("econ_fast_travel_schedule")))
+
+    @app.route("/v2/storage/econ_loot_table_bindings", methods=["GET", "POST", "PUT"])
+    @app.route("/3/v2/storage/econ_loot_table_bindings", methods=["GET", "POST", "PUT"])
+    def econ_loot_table_bindings():
+        return jsonify(_build_econ_objects("econ_loot_table_bindings", get_game_data("econ_loot_table_bindings")))
+
+    @app.route("/v2/storage/econ_loot_table", methods=["GET", "POST", "PUT"])
+    @app.route("/3/v2/storage/econ_loot_table", methods=["GET", "POST", "PUT"])
+    def econ_loot_table():
+        return jsonify(_build_econ_objects("econ_loot_table", get_game_data("econ_loot_table")))
+
+    @app.route("/v2/storage/econ_crafting_materials", methods=["GET", "POST", "PUT"])
+    @app.route("/3/v2/storage/econ_crafting_materials", methods=["GET", "POST", "PUT"])
+    def econ_crafting_materials():
+        return jsonify(_build_econ_objects("econ_crafting_materials", get_game_data("econ_crafting_materials")))
+
+    @app.route("/v2/storage/metadata", methods=["GET", "POST", "PUT"])
+    @app.route("/3/v2/storage/metadata", methods=["GET", "POST", "PUT"])
+    def econ_metadata():
+        return jsonify(_build_econ_objects("metadata", get_game_data("metadata")))
 
 
 @app.route("/3/v2/storage", methods=["GET", "POST", "PUT"])
@@ -1552,22 +1597,27 @@ def storage():
 
                 print(f"[STORAGE] collection: '{collection}', key: '{key}'")
 
+                # user_id in the request is a UUID hex; resolve to username for all storage lookups
+                resolved_username = _resolve_username_from_uid(user_id, fallback=username)
+
                 if collection.startswith("econ_"):
                     econ_data = get_game_data(collection)
                     print(f"[STORAGE] econ_data type: {type(econ_data)}")
                     print(f"[STORAGE] econ_data length: {len(econ_data) if econ_data else 0}")
 
-                    # DEBUG: Print the actual data to see structure
-                    if econ_data:
-                        print(f"[STORAGE] econ_data content: {json.dumps(econ_data)[:500]}")
-
                     if econ_data and len(econ_data) > 0:
                         # Check if it's a list or dict
                         if isinstance(econ_data, dict):
-                            # If it's a dict with items
-                            items_list = econ_data.get("items", [])
-                            if items_list:
-                                for item in items_list:
+                            # Check for specific keys
+                            if "upgrades" in econ_data and isinstance(econ_data["upgrades"], list):
+                                items_list = econ_data["upgrades"]
+                            elif "items" in econ_data and isinstance(econ_data["items"], list):
+                                items_list = econ_data["items"]
+                            else:
+                                items_list = [econ_data]
+
+                            for item in items_list:
+                                if isinstance(item, dict):
                                     item_id = item.get("id") or item.get("ItemId") or item.get("itemID") or "unknown"
                                     results.append({
                                         "collection": collection,
@@ -1579,41 +1629,15 @@ def storage():
                                         "create_time": "2025-05-28T16:03:59Z",
                                         "update_time": "2025-05-28T16:03:59Z"
                                     })
-                            else:
-                                # Maybe it's a single config object
-                                results.append({
-                                    "collection": collection,
-                                    "key": "config",
-                                    "user_id": "00000000-0000-0000-0000-000000000000",
-                                    "value": json.dumps(econ_data),
-                                    "version": "5c8518bd84cdb43a4e057cb62ca8d5b1",
-                                    "permission_read": 2,
-                                    "create_time": "2025-05-28T16:03:59Z",
-                                    "update_time": "2025-05-28T16:03:59Z"
-                                })
                         else:
                             # It's a list
                             if key == "config":
                                 for item in econ_data:
-                                    item_id = item.get("id") or item.get("ItemId") or item.get("itemID") or "unknown"
-                                    results.append({
-                                        "collection": collection,
-                                        "key": item_id,
-                                        "user_id": "00000000-0000-0000-0000-000000000000",
-                                        "value": json.dumps(item),
-                                        "version": "5c8518bd84cdb43a4e057cb62ca8d5b1",
-                                        "permission_read": 2,
-                                        "create_time": "2025-05-28T16:03:59Z",
-                                        "update_time": "2025-05-28T16:03:59Z"
-                                    })
-                            else:
-                                found = False
-                                for item in econ_data:
-                                    item_id = item.get("id") or item.get("ItemId") or item.get("itemID") or item.get("ID")
-                                    if item_id == key:
+                                    if isinstance(item, dict):
+                                        item_id = item.get("id") or item.get("ItemId") or item.get("itemID") or "unknown"
                                         results.append({
                                             "collection": collection,
-                                            "key": key,
+                                            "key": item_id,
                                             "user_id": "00000000-0000-0000-0000-000000000000",
                                             "value": json.dumps(item),
                                             "version": "5c8518bd84cdb43a4e057cb62ca8d5b1",
@@ -1621,8 +1645,24 @@ def storage():
                                             "create_time": "2025-05-28T16:03:59Z",
                                             "update_time": "2025-05-28T16:03:59Z"
                                         })
-                                        found = True
-                                        break
+                            else:
+                                found = False
+                                for item in econ_data:
+                                    if isinstance(item, dict):
+                                        item_id = item.get("id") or item.get("ItemId") or item.get("itemID") or item.get("ID")
+                                        if item_id == key:
+                                            results.append({
+                                                "collection": collection,
+                                                "key": key,
+                                                "user_id": "00000000-0000-0000-0000-000000000000",
+                                                "value": json.dumps(item),
+                                                "version": "5c8518bd84cdb43a4e057cb62ca8d5b1",
+                                                "permission_read": 2,
+                                                "create_time": "2025-05-28T16:03:59Z",
+                                                "update_time": "2025-05-28T16:03:59Z"
+                                            })
+                                            found = True
+                                            break
                                 if not found:
                                     results.append({
                                         "collection": collection,
@@ -1646,90 +1686,62 @@ def storage():
                             "update_time": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
                         })
                 else:
-                    # User collections
+                    # User collections — look up by resolved_username, not raw UUID
+                    _now = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
                     if collection == "user_avatar":
-                        saved = get_user_avatar(user_id)
+                        saved = get_user_avatar(resolved_username)
                         if saved and saved.get('value'):
                             results.append({
-                                "collection": collection,
-                                "key": key,
-                                "user_id": user_id,
+                                "collection": collection, "key": key, "user_id": user_id,
                                 "value": saved['value'],
                                 "version": saved.get('version', secrets.token_hex(16)),
                                 "permission_read": 2,
-                                "create_time": saved.get('create_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())),
-                                "update_time": saved.get('update_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
+                                "create_time": saved.get('create_time', _now),
+                                "update_time": saved.get('update_time', _now)
                             })
                         else:
                             results.append({
-                                "collection": collection,
-                                "key": key,
-                                "user_id": user_id,
-                                "value": "{}",
-                                "version": secrets.token_hex(16),
-                                "permission_read": 1,
-                                "create_time": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-                                "update_time": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+                                "collection": collection, "key": key, "user_id": user_id,
+                                "value": "{}", "version": secrets.token_hex(16),
+                                "permission_read": 1, "create_time": _now, "update_time": _now
                             })
-                    elif collection == "user_inventory":
-                        saved = get_user_items(user_id, collection, key)
+                    elif collection in ("user_inventory", "user_preferences", "user_quest_system"):
+                        saved = get_user_items(resolved_username, collection, key)
+                        pread = 2 if collection == "user_inventory" and key == "avatar" else 1
                         if saved and saved.get('value'):
                             results.append({
-                                "collection": collection,
-                                "key": key,
-                                "user_id": user_id,
+                                "collection": collection, "key": key, "user_id": user_id,
                                 "value": saved['value'],
                                 "version": saved.get('version', secrets.token_hex(16)),
-                                "permission_read": 1,
-                                "permission_write": 1,
-                                "create_time": saved.get('create_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())),
-                                "update_time": saved.get('update_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
+                                "permission_read": pread, "permission_write": 1,
+                                "create_time": saved.get('create_time', _now),
+                                "update_time": saved.get('update_time', _now)
                             })
                         else:
+                            # fall back to _build_storage_objects defaults for known keys
+                            defaults = {
+                                ("user_inventory", "avatar"):          default_avatar_inventory,
+                                ("user_inventory", "research"):        default_research_inventory,
+                                ("user_inventory", "stash"):           lambda: DEFAULT_STASH,
+                                ("user_inventory", "upgrades"):        lambda: DEFAULT_STASH_UPGRADES,
+                                ("user_inventory", "gameplay_loadout"): lambda: DEFAULT_LOADOUT,
+                                ("user_preferences", "gameplay_items"): lambda: DEFAULT_GAMEPLAY_PREFS,
+                                ("user_preferences", "common"):        lambda: DEFAULT_COMMON_PREFS,
+                                ("user_preferences", "skills"):        lambda: '{"disabledSkills":[]}',
+                                ("user_quest_system", "progress"):     lambda: '{"version":1,"completed":[]}',
+                            }
+                            default_fn = defaults.get((collection, key))
+                            fallback_val = default_fn() if default_fn else "{}"
                             results.append({
-                                "collection": collection,
-                                "key": key,
-                                "user_id": user_id,
-                                "value": "{}",
-                                "version": secrets.token_hex(16),
-                                "permission_read": 1,
-                                "permission_write": 1,
-                                "create_time": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-                                "update_time": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
-                            })
-                    elif collection == "user_preferences":
-                        saved = get_user_items(user_id, collection, key)
-                        if saved and saved.get('value'):
-                            results.append({
-                                "collection": collection,
-                                "key": key,
-                                "user_id": user_id,
-                                "value": saved['value'],
-                                "version": saved.get('version', secrets.token_hex(16)),
-                                "permission_read": 1,
-                                "permission_write": 1,
-                                "create_time": saved.get('create_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())),
-                                "update_time": saved.get('update_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
-                            })
-                        else:
-                            results.append({
-                                "collection": collection,
-                                "key": key,
-                                "user_id": user_id,
-                                "value": "{}",
-                                "version": secrets.token_hex(16),
-                                "permission_read": 1,
-                                "permission_write": 1,
-                                "create_time": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-                                "update_time": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+                                "collection": collection, "key": key, "user_id": user_id,
+                                "value": fallback_val, "version": secrets.token_hex(16),
+                                "permission_read": pread, "permission_write": 1,
+                                "create_time": _now, "update_time": _now
                             })
                     else:
                         results.append({
-                            "collection": collection,
-                            "key": key,
-                            "user_id": user_id,
-                            "value": "{}",
-                            "version": secrets.token_hex(16),
+                            "collection": collection, "key": key, "user_id": user_id,
+                            "value": "{}", "version": secrets.token_hex(16),
                             "permission_read": 1,
                             "create_time": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
                             "update_time": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
@@ -1737,19 +1749,31 @@ def storage():
 
             response_data = {"objects": results}
             print(f"[STORAGE] Returning {len(results)} objects")
+            print("[STORAGE] --- OBJECT VALUES ---")
+            for _obj in results:
+                _val_preview = str(_obj.get("value", ""))[:500]
+                print(f"  [{_obj.get('collection')}:{_obj.get('key')}] user={_obj.get('user_id', '?')} value={_val_preview}")
+            print("[STORAGE] --- END OBJECT VALUES ---")
         else:
-            # Write operations
             objects = body.get("objects", []) if body else []
             if objects:
-                updates = {}
+                _now = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
                 for obj in objects:
                     col = obj.get("collection", "")
                     key = obj.get("key", "")
                     val = obj.get("value", "")
                     if isinstance(val, (dict, list)):
                         val = json.dumps(val)
+                    _item = {
+                        'value': val,
+                        'update_time': obj.get('update_time', _now),
+                        'version': obj.get('version', secrets.token_hex(8))
+                    }
 
-                    if col == 'user_avatar' and username:
+                    if not username:
+                        continue
+
+                    if col == 'user_avatar':
                         try:
                             av = json.loads(val) if isinstance(val, str) else val
                             if isinstance(av, dict):
@@ -1770,34 +1794,15 @@ def storage():
                                 av = enforce_dev_policy(av, is_dev)
                                 save_user_avatar(username, {
                                     'value': json.dumps(av),
-                                    'update_time': obj.get('update_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())),
-                                    'version': obj.get('version', secrets.token_hex(8))
+                                    'update_time': _item['update_time'],
+                                    'version': _item['version']
                                 })
                         except Exception as e:
                             print(f"[STORAGE] Avatar update error: {e}")
 
-                    if col == 'user_inventory' and key == 'stash' and username:
-                        save_user_items(username, {
-                            'value': val,
-                            'update_time': obj.get('update_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())),
-                            'version': obj.get('version', secrets.token_hex(8))
-                        }, 'user_inventory', 'stash')
-
-                    if col == 'user_inventory' and key == 'gameplay_loadout' and username:
-                        save_user_items(username, {
-                            'value': val,
-                            'update_time': obj.get('update_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())),
-                            'version': obj.get('version', secrets.token_hex(8))
-                        }, 'user_inventory', 'gameplay_loadout')
-
-                    if col == 'user_inventory' and key == 'avatar' and username:
-                        save_user_items(username, {
-                            'value': val,
-                            'update_time': obj.get('update_time', time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())),
-                            'version': obj.get('version', secrets.token_hex(8))
-                        }, 'user_inventory', 'avatar')
-
-                    set_user_data_bulk(username, updates)
+                    elif col.startswith('user_'):
+                        # Save ALL user_inventory / user_preferences / user_quest_system keys universally
+                        save_user_items(username, _item, col, key)
 
                 response_data = {"acks": [
                     {"collection": o.get("collection"), "key": o.get("key"), "version": secrets.token_hex(16)}
@@ -1810,7 +1815,6 @@ def storage():
 
     response = jsonify(response_data)
     print(f"[STORAGE] Response objects: {len(response_data.get('objects', []))}")
-    print("="*80 + "\n")
     return response, 200
 
 @app.route("/3/v2/storage/econ_avatar_items", methods=["GET", "POST", "PUT"])
@@ -1925,25 +1929,124 @@ def research_item():
     username = _toast_auth() or _get_username_from_request()
     if not username:
         return jsonify({"payload": json.dumps({"succeeded": False, "errorCode": "Unknown"})})
-    all_nodes = get_all_research_node_ids() or []
+
+    raw_body = request.get_data(as_text=True)
+    print(f"\n[RESEARCH] Raw body: {raw_body[:600]}")
+
+    try:
+        body = json.loads(raw_body)
+    except Exception:
+        body = {}
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except Exception:
+            body = {}
+    payload_raw = body.get("payload", body)
+    if isinstance(payload_raw, str):
+        try:
+            payload_raw = json.loads(payload_raw)
+        except Exception:
+            payload_raw = {}
+
+    print(f"[RESEARCH] Parsed payload: {json.dumps(payload_raw)[:400]}")
+
+    node_id = (
+        payload_raw.get("nodeID") or
+        payload_raw.get("node_id") or
+        payload_raw.get("itemID") or
+        payload_raw.get("id") or
+        ""
+    )
+    print(f"[RESEARCH] node_id extracted: {node_id!r}")
+
+    saved = get_user_items(username, 'user_inventory', 'research')
+    print(f"[RESEARCH] existing saved: {str(saved)[:300]}")
+    if saved and saved.get('value'):
+        try:
+            research_data = json.loads(saved['value']) if isinstance(saved['value'], str) else saved['value']
+        except Exception as e:
+            print(f"[RESEARCH] parse error: {e}")
+            research_data = {}
+    else:
+        research_data = {}
+    nodes_list = research_data.get('nodes', [])
+    print(f"[RESEARCH] current nodes ({len(nodes_list)} items)")
+
+    if node_id and node_id not in nodes_list:
+        nodes_list.append(node_id)
+        print(f"[RESEARCH] ADDED {node_id} → {len(nodes_list)} total nodes")
+    elif node_id:
+        print(f"[RESEARCH] {node_id} already unlocked")
+    else:
+        print(f"[RESEARCH] WARNING — node_id empty. Payload keys: {list(payload_raw.keys())}")
+
+    new_val = json.dumps({'nodes': nodes_list})
+    save_result = save_user_items(username, {
+        'value': new_val,
+        'update_time': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'version': secrets.token_hex(8)
+    }, 'user_inventory', 'research')
+    print(f"[RESEARCH] save result: {save_result}")
+
     cur = get_user_currency(username)
-    return jsonify({"payload": json.dumps({
+    resp = {
         "succeeded": True, "errorCode": "None",
         "wallet": {"softCurrency": cur.get("nuts", 9999999), "hardCurrency": cur.get("cc", 9999999), "researchPoints": cur.get("rp", 9999999)},
-        "inventoryResearchNodes": all_nodes,
-    })})
+        "inventoryResearchNodes": nodes_list,
+    }
+    print(f"[RESEARCH] returning {len(nodes_list)} nodes\n")
+    return jsonify({"payload": json.dumps(resp)})
 
 @app.route("/v2/rpc/research.skill", methods=["POST", "GET"])
 def research_skill():
     username = _toast_auth() or _get_username_from_request()
     if not username:
         return jsonify({"payload": json.dumps({"succeeded": False, "errorCode": "Unknown"})})
-    all_nodes = get_all_research_node_ids() or []
+
+    raw_body = request.get_data(as_text=True)
+    try:
+        body = json.loads(raw_body)
+    except Exception:
+        body = {}
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except Exception:
+            body = {}
+    payload_raw = body.get("payload", body)
+    if isinstance(payload_raw, str):
+        try:
+            payload_raw = json.loads(payload_raw)
+        except Exception:
+            payload_raw = {}
+
+    node_id = payload_raw.get("nodeID") or payload_raw.get("node_id") or payload_raw.get("itemID") or payload_raw.get("id") or ""
+
+    saved = get_user_items(username, 'user_inventory', 'research')
+    if saved and saved.get('value'):
+        try:
+            research_data = json.loads(saved['value']) if isinstance(saved['value'], str) else saved['value']
+        except Exception:
+            research_data = {}
+    else:
+        research_data = {}
+    nodes_list = research_data.get('nodes', [])
+
+    if node_id and node_id not in nodes_list:
+        nodes_list.append(node_id)
+
+    save_user_items(username, {
+        'value': json.dumps({'nodes': nodes_list}),
+        'update_time': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'version': secrets.token_hex(8)
+    }, 'user_inventory', 'research')
+
     cur = get_user_currency(username)
     return jsonify({"payload": json.dumps({
         "succeeded": True, "errorCode": "None",
         "wallet": {"softCurrency": cur.get("nuts", 9999999), "hardCurrency": cur.get("cc", 9999999), "researchPoints": cur.get("rp", 9999999)},
-        "inventoryResearchNodes": all_nodes,
+        "inventoryResearchNodes": nodes_list,
     })})
 
 @app.route("/3/v2/rpc/promo.redeem", methods=["POST", "GET"])
@@ -2146,8 +2249,8 @@ def client_bootstrap():
     payload = {
         "updateType": "None", "attestResult": "Valid",
         "attestTokenExpiresAt": 1820877961,
-        "photonAppID": "",
-        "photonVoiceAppID": "",
+        "photonAppID": "8049869d-4304-491e-b844-e77fdf5df0e4",
+        "photonVoiceAppID": "9aea8f08-e6d9-4a1c-9934-cbca4142c479",
         "metadataHash": "3225b4ed43082cec01c79acd8b1c09ea335f77870663342a5dededf6f4979f66",
         "termsAcceptanceNeeded": [], "dailyMissionDateKey": "",
         "dailyMissions": None, "dailyMissionResetTime": 0,
@@ -2454,12 +2557,29 @@ def handle_ws():
         try:
             parts = token.split(".")
             if len(parts) == 3:
-                payload = parts[1] + "=" * (-len(parts[1]) % 4)
-                decoded = base64.urlsafe_b64decode(payload).decode("utf-8")
-                return jsonify({"status": "success", "decoded": json.loads(decoded)}), 200
+                # Get the payload part
+                payload = parts[1]
+
+                # Add padding if needed (more robust way)
+                padding_needed = len(payload) % 4
+                if padding_needed:
+                    payload += "=" * (4 - padding_needed)
+
+                # Decode base64 URL-safe
+                decoded_bytes = base64.urlsafe_b64decode(payload)
+                decoded_str = decoded_bytes.decode("utf-8")
+                decoded_json = json.loads(decoded_str)
+
+                return jsonify({"status": "success", "decoded": decoded_json}), 200
             return jsonify({"status": "error", "message": "Invalid token format"}), 400
+        except base64.binascii.Error as e:
+            return jsonify({"status": "error", "message": f"Base64 decode error: {str(e)}"}), 400
+        except UnicodeDecodeError as e:
+            return jsonify({"status": "error", "message": f"Invalid UTF-8 encoding: {str(e)}"}), 400
+        except json.JSONDecodeError as e:
+            return jsonify({"status": "error", "message": f"Invalid JSON: {str(e)}"}), 400
         except Exception as e:
-            return jsonify({"status": "error", "message": str(e)}), 400
+            return jsonify({"status": "error", "message": f"Unexpected error: {str(e)}"}), 400
     return jsonify({"status": "error", "message": "No token provided"}), 400
 
 @app.route("/v2/account/authenticate/steam", methods=["POST", "GET"])
@@ -2759,16 +2879,84 @@ def purchase_research_points():
 @app.route("/v2/rpc/stash.upgrade", methods=["POST", "GET"])
 @app.route("/v2/rpc/purchase.stashUpgrade", methods=["POST", "GET"])
 def purchase_upgrade():
+    print("\n" + "="*70)
+    raw_body = request.get_data(as_text=True)
+
     username = _toast_auth() or _get_username_from_request()
+
     if not username:
+        print("[UPGRADE] FAIL — no username, returning error")
         return jsonify({"payload": json.dumps({"succeeded": False, "errorCode": "Unknown"})})
+
+    # Body can arrive as a JSON string (double-encoded) or a JSON object
+    try:
+        body = json.loads(raw_body)
+    except Exception:
+        body = {}
+
+    # If body itself is a string, it's double-encoded — decode again
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except Exception:
+            body = {}
+
+    # Payload wrapper or flat body
+    payload_raw = body.get("payload", body)
+    if isinstance(payload_raw, str):
+        try:
+            payload_raw = json.loads(payload_raw)
+        except Exception:
+            payload_raw = {}
+
+    print(f"[UPGRADE] Parsed payload: {json.dumps(payload_raw)[:500]}")
+
+    upgrade_id = (
+        payload_raw.get("upgradeID") or
+        payload_raw.get("upgrade_id") or
+        payload_raw.get("id") or
+        payload_raw.get("itemID") or
+        payload_raw.get("item_id") or
+        ""
+    )
+
+    # Load existing upgrades
+    saved = get_user_items(username, 'user_inventory', 'upgrades')
+    if saved and saved.get('value'):
+        try:
+            upgrades_data = json.loads(saved['value']) if isinstance(saved['value'], str) else saved['value']
+        except Exception as e:
+                    upgrades_data = {}
+    else:
+        upgrades_data = {}
+    upgrades_list = upgrades_data.get('upgrades', [])
+    print(f"[UPGRADE] current upgrades_list ({len(upgrades_list)} items): {upgrades_list}")
+
+    # Apply the new upgrade if not already present
+    if upgrade_id and upgrade_id not in upgrades_list:
+        upgrades_list.append(upgrade_id)
+        print(f"[UPGRADE] ADDED {upgrade_id} → list now has {len(upgrades_list)} items")
+    elif upgrade_id:
+        print(f"[UPGRADE] {upgrade_id} already in list")
+    else:
+        print(f"[UPGRADE] WARNING — upgrade_id is empty. Payload keys: {list(payload_raw.keys())}")
+
+    new_val = json.dumps({'upgrades': upgrades_list})
+    save_result = save_user_items(username, {
+        'value': new_val,
+        'update_time': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'version': secrets.token_hex(8)
+    }, 'user_inventory', 'upgrades')
+
     cur = get_user_currency(username)
-    return jsonify({"payload": json.dumps({
+    resp = {
         "succeeded": True, "errorCode": "None",
         "stashCols": 8, "stashRows": 8,
         "wallet": {"softCurrency": cur.get("nuts", 9999999), "hardCurrency": cur.get("cc", 9999999), "researchPoints": cur.get("rp", 9999999)},
-        "inventoryUpgrades": [],
-    })})
+        "inventoryUpgrades": upgrades_list,
+    }
+    print(f"[UPGRADE] returning response: {json.dumps(resp)[:400]}")
+    return jsonify({"payload": json.dumps(resp)})
 
 @app.route("/v2/rpc/quest.complete", methods=["POST", "GET"])
 def quests_complete():
