@@ -1,5 +1,5 @@
 // @ts-nocheck
-const api = "https://explodingcar.pythonanywhere.com/"
+const api = "https://b2f63.pythonanywhere.com/"
 const keepAlive = [];
 
 Il2Cpp.perform(() => {
@@ -22,7 +22,7 @@ Il2Cpp.perform(() => {
                 "1.20-1.30": "https://raw.githubusercontent.com/wewewer4fteeeeeee/thiiiingg/refs/heads/main/1.20-.130.zip"
             };
 
-            if (!version) return versionMap["1.56.0"];
+            if (!version) return "https://raw.githubusercontent.com/Alphamageddon/Animal-Company-Copy-Tutorial/refs/heads/main/game-data/Mining%20Update.zip";
 
             const versionNum = parseFloat(version);
             
@@ -34,7 +34,7 @@ Il2Cpp.perform(() => {
             if (versionNum >= 1.30 && versionNum < 1.40) return versionMap["1.30-1.39"];
             if (versionNum >= 1.20 && versionNum < 1.30) return versionMap["1.20-1.30"];
             
-            return versionMap["1.56.0"];
+            return "https://raw.githubusercontent.com/Alphamageddon/Animal-Company-Copy-Tutorial/refs/heads/main/game-data/Mining%20Update.zip";
         };
 
         let gameDataUrl = "";
