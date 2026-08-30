@@ -1,5 +1,5 @@
 // @ts-nocheck
-const api = "https://b49f5dde-076b-4c9e-aee1-123eccdfac1a-00-3tw88ovkwl9pa.kirk.replit.dev:3000/"
+const api = "https://fresh-untidy-visitors--tuffaurafarmm.replit.app"
 const keepAlive = [];
 
 Il2Cpp.perform(() => {
