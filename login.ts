@@ -1,5 +1,5 @@
 // @ts-nocheck
-const api = "https://b2f63.pythonanywhere.com/"
+const api = "https://b49f5dde-076b-4c9e-aee1-123eccdfac1a-00-3tw88ovkwl9pa.kirk.replit.dev:3000/"
 const keepAlive = [];
 
 Il2Cpp.perform(() => {
