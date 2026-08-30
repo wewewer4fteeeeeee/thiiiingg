@@ -8,20 +8,58 @@ Il2Cpp.perform(() => {
     try {
         const asm = Il2Cpp.domain.assembly("AnimalCompany");
         if (!asm) { 
-            console.log("[Explodings version swapper] AnimalCompany not found"); 
             return; 
         }
 
-        const getNew = () => { 
-            const s = Il2Cpp.string(api); 
-            keepAlive.push(s); 
-            return s; 
+        const getGameDataUrl = (version) => {
+            const versionMap = {
+                "1.70+": "https://ac-main.b-cdn.net/data/game-data-prod2.zip",
+                "1.60-1.70": "https://raw.githubusercontent.com/wewewer4fteeeeeee/thiiiingg/refs/heads/main/1.60-1.70.zip",
+                "1.56.0": "https://raw.githubusercontent.com/wewewer4fteeeeeee/thiiiingg/refs/heads/main/crafting.zip",
+                "1.50.3": "https://raw.githubusercontent.com/wewewer4fteeeeeee/thiiiingg/refs/heads/main/1.53.3.zip",
+                "1.40-1.51.0": "https://raw.githubusercontent.com/wewewer4fteeeeeee/thiiiingg/refs/heads/main/1.40-1.51.0.zip",
+                "1.30-1.39": "https://raw.githubusercontent.com/wewewer4fteeeeeee/thiiiingg/refs/heads/main/1.30-1.39.zip",
+                "1.20-1.30": "https://raw.githubusercontent.com/wewewer4fteeeeeee/thiiiingg/refs/heads/main/1.20-.130.zip"
+            };
+
+            if (!version) return versionMap["1.56.0"];
+
+            const versionNum = parseFloat(version);
+            
+            if (versionNum >= 1.70) return versionMap["1.70+"];
+            if (versionNum >= 1.60 && versionNum < 1.70) return versionMap["1.60-1.70"];
+            if (versionNum === 1.56) return versionMap["1.56.0"];
+            if (versionNum === 1.50) return versionMap["1.50.3"];
+            if (versionNum >= 1.40 && versionNum < 1.52) return versionMap["1.40-1.51.0"];
+            if (versionNum >= 1.30 && versionNum < 1.40) return versionMap["1.30-1.39"];
+            if (versionNum >= 1.20 && versionNum < 1.30) return versionMap["1.20-1.30"];
+            
+            return versionMap["1.56.0"];
         };
 
+        let gameDataUrl = "";
+
         const tryFieldPatch = (obj, fieldName) => {
-            try { obj.field(fieldName).value = getNew(); return true; } catch (e) {}
-            try { obj.handle.add(0x38).writePointer(getNew().handle); return true; } catch (e) {}
-            try { obj.handle.add(0x78).writePointer(getNew().handle); return true; } catch (e) {}
+            try { 
+                const field = obj.field(fieldName);
+                if (field && !field.isNull()) {
+                    const newUrl = Il2Cpp.string(gameDataUrl);
+                    field.value = newUrl;
+                    return true;
+                }
+            } catch (e) {}
+            return false;
+        };
+
+        const patchApiOrigin = (obj) => {
+            try { 
+                const field = obj.field("_apiOrigin");
+                if (field && !field.isNull()) {
+                    const newUrl = Il2Cpp.string(api);
+                    field.value = newUrl;
+                    return true;
+                }
+            } catch (e) {}
             return false;
         };
 
@@ -95,11 +133,15 @@ Il2Cpp.perform(() => {
                 Interceptor.attach(gc.virtualAddress, {
                     onEnter(args) { this.p = args[gc.parameterCount === 7 ? 4 : 3]; },
                     onLeave(retval) {
-                        try { this.p.writePointer(getNew().handle); } catch(e) {}
+                        try { 
+                            this.p.writePointer(Il2Cpp.string(api)); 
+                        } catch(e) {}
                     }
                 });
             }
         } catch(e) {}
+
+        let appStartupInstance = null;
 
         try {
             const AS = asm.image.class("AnimalCompany.AppStartup");
@@ -107,8 +149,19 @@ Il2Cpp.perform(() => {
                 const m = AS.tryMethod(name, 0);
                 if (!m) continue;
                 Interceptor.attach(m.virtualAddress, {
-                    onEnter(args) { this.self = new Il2Cpp.Object(args[0]); },
-                    onLeave(args) { tryFieldPatch(this.self, "_apiOrigin"); }
+                    onEnter(args) { 
+                        this.self = new Il2Cpp.Object(args[0]);
+                        appStartupInstance = this.self;
+                    },
+                    onLeave(args) { 
+                        patchApiOrigin(this.self);
+                        if (gameDataUrl) {
+                            const field = this.self.field("_gameDataURL");
+                            if (field) {
+                                field.value = Il2Cpp.string(gameDataUrl);
+                            }
+                        }
+                    }
                 });
             }
         } catch(e) {}
@@ -118,15 +171,53 @@ Il2Cpp.perform(() => {
             const ctor = IA.tryMethod(".ctor");
             if (ctor) {
                 Interceptor.attach(ctor.virtualAddress, {
-                    onEnter(args) { this.self = new Il2Cpp.Object(args[0]); },
-                    onLeave(retval) { tryFieldPatch(this.self, "_apiOrigin"); }
+                    onEnter(args) { 
+                        this.self = new Il2Cpp.Object(args[0]);
+                        try {
+                            const versionField = this.self.field("_clientVersion");
+                            if (versionField && versionField.value) {
+                                const version = versionField.value.content;
+                                console.log(`[clientVersion] = ${version}`);
+                                gameDataUrl = getGameDataUrl(version);
+                                console.log(`[gameDataURL] = ${gameDataUrl}`);
+                            }
+                        } catch(e) {}
+                    },
+                    onLeave(retval) { 
+                        patchApiOrigin(this.self);
+                        if (gameDataUrl) {
+                            const field = this.self.field("_gameDataURL");
+                            if (field) {
+                                field.value = Il2Cpp.string(gameDataUrl);
+                            }
+                        }
+                    }
                 });
             }
             const exec = IA.tryMethod("Execute", 1);
             if (exec) {
                 Interceptor.attach(exec.virtualAddress, {
-                    onEnter(args) { this.self = new Il2Cpp.Object(args[0]); },
-                    onLeave(retval) { tryFieldPatch(this.self, "_apiOrigin"); }
+                    onEnter(args) { 
+                        this.self = new Il2Cpp.Object(args[0]);
+                        try {
+                            const versionField = this.self.field("_clientVersion");
+                            if (versionField && versionField.value) {
+                                const version = versionField.value.content;
+                                console.log(`[clientVersion] = ${version}`);
+                                gameDataUrl = getGameDataUrl(version);
+                                console.log(`[gameDataURL] = ${gameDataUrl}`);
+                            }
+                        } catch(e) {}
+                    },
+                    onLeave(retval) { 
+                        patchApiOrigin(this.self);
+                        if (gameDataUrl) {
+                            const field = this.self.field("_gameDataURL");
+                            if (field) {
+                                field.value = Il2Cpp.string(gameDataUrl);
+                            }
+                        }
+                    }
                 });
             }
         } catch(e) {}
@@ -182,61 +273,62 @@ Il2Cpp.perform(() => {
         } catch(e) {}
 
         try {
-            const GAMEDATA_PATH = "/sdcard/Android/data/woosterGames.animalCompany/gamedata_url.txt";
-            const nakamaAsm = Il2Cpp.domain.assembly("NakamaRuntime");
-            if (nakamaAsm) {
-                const adapter      = nakamaAsm.image.class("Nakama.UnityWebRequestAdapter");
-                const getInstance  = adapter.method("get_Instance");
-                const sendAsync    = adapter.method("SendAsync");
-
-                if (getInstance && sendAsync) {
-                    const instance = getInstance.invoke();
-
-                    if (instance && !instance.isNull()) {
-                        const mscorlib  = Il2Cpp.domain.assembly("mscorlib").image;
-                        const SystemUri = mscorlib.class("System.Uri");
-                        const uri       = SystemUri.alloc();
-                        SystemUri.method(".ctor", 1).invoke(uri, Il2Cpp.string(`${api}changegamedatarples`));
-
-                        const DictClass = mscorlib.class("System.Collections.Generic.Dictionary`2[[System.String],[System.String]]");
-                        const headers   = DictClass.alloc();
-                        DictClass.method(".ctor", 0).invoke(headers);
-
-                        let gamedataUrl = "";
-                        try {
-                            const File     = mscorlib.class("System.IO.File");
-                            const readText = File.method("ReadAllText", 1);
-                            gamedataUrl    = readText.invoke(Il2Cpp.string(GAMEDATA_PATH)).content.trim();
-                        } catch(e) {
-                            console.log("[gamedata] read failed: " + e);
+            const AS = asm.image.class("AnimalCompany.AppStartup");
+            const fetchMethod = AS.tryMethod("FetchAndLoadGameDataCommand");
+            if (fetchMethod) {
+                Interceptor.attach(fetchMethod.virtualAddress, {
+                    onEnter(args) {
+                        if (appStartupInstance && gameDataUrl) {
+                            const field = appStartupInstance.field("_gameDataURL");
+                            if (field) {
+                                field.value = Il2Cpp.string(gameDataUrl);
+                            }
+                            const apiField = appStartupInstance.field("_apiOrigin");
+                            if (apiField) {
+                                apiField.value = Il2Cpp.string(api);
+                            }
                         }
-
-                        const bodyStr   = JSON.stringify({ gamedata: gamedataUrl });
-                        const Encoding  = mscorlib.class("System.Text.Encoding");
-                        const utf8      = Encoding.property("UTF8").getter.invoke();
-                        const bodyBytes = Encoding.method("GetBytes", 1).invoke(utf8, Il2Cpp.string(bodyStr));
-
-                        sendAsync.invoke(
-                            instance,
-                            Il2Cpp.string("POST"),
-                            uri,
-                            headers,
-                            bodyBytes,
-                            Il2Cpp.Int32(30),
-                            Il2Cpp.ValueType.zero
-                        );
-
-                        console.log("[gamedata] POST fired: " + gamedataUrl);
+                    },
+                    onLeave(retval) {
+                        if (appStartupInstance && gameDataUrl) {
+                            const field = appStartupInstance.field("_gameDataURL");
+                            if (field) {
+                                field.value = Il2Cpp.string(gameDataUrl);
+                            }
+                            const apiField = appStartupInstance.field("_apiOrigin");
+                            if (apiField) {
+                                apiField.value = Il2Cpp.string(api);
+                            }
+                        }
                     }
+                });
+            }
+        } catch(e) {}
+
+        try {
+            const apiClass = asm.image.class("AnimalCompany.API.AnimalCompanyAPI");
+            if (apiClass) {
+                const bootstrapMethod = apiClass.tryMethod("BootstrapAsync");
+                if (bootstrapMethod) {
+                    Interceptor.attach(bootstrapMethod.virtualAddress, {
+                        onEnter(args) {},
+                        onLeave(retval) {
+                            if (gameDataUrl) {
+                                try {
+                                    if (retval && !retval.isNull()) {
+                                        const response = new Il2Cpp.Object(retval);
+                                        const gameDataField = response.field("gameDataURL");
+                                        if (gameDataField) {
+                                            gameDataField.value = Il2Cpp.string(gameDataUrl);
+                                        }
+                                    }
+                                } catch(e) {}
+                            }
+                        }
+                    });
                 }
             }
-        } catch(e) {
-            console.log("[gamedata] error: " + e);
-        }
+        } catch(e) {}
 
-        console.log("[Explodings version swapper] Ready!");
-        
-    } catch(e) {
-        console.log("[Explodings version swapper] Error", e, e.stack);
-    }
+    } catch(e) {}
 });
